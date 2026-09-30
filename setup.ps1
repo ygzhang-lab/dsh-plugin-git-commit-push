@@ -1,12 +1,18 @@
 <#
 .SYNOPSIS
-  Install dsh-plugin-git-commit-push into the active DSH profile.
+  Install a local CHECKOUT of dsh-plugin-git-commit-push into a DSH profile.
 
 .DESCRIPTION
   Wires the plugin into the profile's bundle stack in two deliberate steps:
 
     1. adds the plugin to the profile's package.json as a `link:` dependency;
     2. appends the package to `dsh.profile.bundles`.
+
+  Installing from npm does not need this script: use Settings > Plugins (type
+  `dsh-plugin-git-commit-push`) or
+  `dsh plugin --profile <profile> add dsh-plugin-git-commit-push`.
+  This script is for a checkout you are editing, which should be linked rather
+  than copied into node_modules.
 
   The mount row is deliberately NOT written into the profile's patch file: it
   comes from the package's own bundle patch (`cordis.patch.yml`, declared as
@@ -36,7 +42,9 @@
   Reverses the two edits, strips a legacy mount row and removes the linked package.
 
 .EXAMPLE
-  powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.dsh\local-plugins\dsh-plugin-git-commit-push\setup.ps1"
+  powershell -ExecutionPolicy Bypass -File .\setup.ps1
+  powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Profile web
+  powershell -ExecutionPolicy Bypass -File .\setup.ps1 -Uninstall
 #>
 [CmdletBinding()]
 param(

@@ -26,7 +26,8 @@
  * the fixed command set); never commits in a container directory — it reports
  * the candidate repositories instead.
  */
-import { loadSettings, CONFIG_PATH } from './lib/config.js'
+import { loadSettingsReport, CONFIG_PATH, userConfigPath, configCandidates } from './lib/config.js'
+import { skillDefinition } from './lib/skill.js'
 import { survey } from './lib/survey.js'
 import {
   commit, createTag, headShort, numstat, push, pushAfterRebase,
@@ -345,6 +346,10 @@ function applyCard(options) {
 /**
  * The single entry point behind both the tool and the `/commit-push` command.
  *
+ * Settings are read here and passed down so that a settings file which exists
+ * but does not parse can be REPORTED. Silently committing with the defaults
+ * would leave a user staring at a config file that appears to do nothing.
+ *
  * @param {object} ctx plugin context
  * @param {object} request
  * @param {string} request.action `prepare` | `apply` | `auto`
@@ -357,7 +362,25 @@ function applyCard(options) {
  * @returns {Promise<ReturnType<typeof valueOf>>}
  */
 export async function run(ctx, request, exec) {
-  const settings = await loadSettings()
+  const { settings, problem } = await loadSettingsReport()
+  const result = await runWithSettings(ctx, request, exec, settings)
+  if (problem === undefined) return result
+  return {
+    ...result,
+    card: `${result.card}\n配置未生效：${problem}`,
+    note: result.note === undefined ? problem : `${result.note}；${problem}`,
+  }
+}
+
+/**
+ * Everything below `run` works on resolved settings.
+ *
+ * @param {object} ctx plugin context
+ * @param {object} request
+ * @param {object} [exec]
+ * @param {typeof import('./lib/config.js').DEFAULTS} settings
+ */
+async function runWithSettings(ctx, request, exec, settings) {
   const cwd = request.cwd !== undefined && request.cwd !== '' ? request.cwd : cwdOf(exec)
   const language = request.language ?? settings.defaultLanguage
   const signal = exec?.signal
@@ -699,6 +722,35 @@ function registerCommand(ctx) {
 }
 
 /**
+ * Register the skill this package ships (SKILL.md) as an embedded runtime skill.
+ *
+ * `skills` is an optional capability exactly like `commands`, so it is not in
+ * the static `inject` list: a host without a skill registry must still get the
+ * tool. The registry draws the ordering — a project-level skill with the same
+ * name outranks this runtime registration, so a user who keeps their own
+ * `git-commit-push` skill in the workspace keeps winning.
+ *
+ * A registration failure is logged, never thrown: losing the skill costs the
+ * model its procedure, losing the tool costs the user the feature.
+ */
+function registerSkill(ctx) {
+  ctx.inject(['skills'], (sctx) => {
+    const skills = sctx.get('skills')
+    if (skills === undefined) return
+    const skill = skillDefinition()
+    if (skill === undefined) {
+      ctx.logger?.warn?.(`${name}: SKILL.md is missing or unusable; the git-commit-push skill was not registered`)
+      return
+    }
+    try {
+      skills.register(skill)
+    } catch (error) {
+      ctx.logger?.warn?.(`${name}: skill "${skill.name}" was not registered — ${brief(error)}`)
+    }
+  })
+}
+
+/**
  * Re-implementation of the registry's schema assertions, so a test can prove
  * the definition would survive `ctx.tools.register` WITHOUT needing a live host.
  *
@@ -767,9 +819,11 @@ export function apply(ctx) {
   }
   ctx.tools.register(TOOL_DEFINITION)
   registerCommand(ctx)
+  registerSkill(ctx)
 }
 
-/** Diagnostics: the settings file this plugin reads, and the self-check hooks. */
-export { CONFIG_PATH, TOOL_DEFINITION }
+/** Diagnostics: the settings files this plugin reads, and the self-check hooks. */
+export { CONFIG_PATH, userConfigPath, configCandidates, TOOL_DEFINITION }
+export { skillDefinition, parseSkillFile, SKILL_NAME, SKILL_PATH, SKILL_SOURCE } from './lib/skill.js'
 export { survey } from './lib/survey.js'
 export { push, pushAfterRebase } from './lib/git.js'

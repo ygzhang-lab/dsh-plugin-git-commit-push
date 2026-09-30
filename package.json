@@ -1,8 +1,7 @@
 {
   "name": "dsh-plugin-git-commit-push",
   "version": "1.1.0",
-  "private": true,
-  "description": "One-call Conventional-Commits git workflow for DSH: survey + commit + optional tag + push, plus a /commit-push slash command that runs with no model involvement. Windows and macOS/Linux.",
+  "description": "One-call Conventional-Commits git workflow for DeepSeek Harness: survey + commit + optional tag + push, plus a /commit-push slash command that runs with no model involvement. Windows and macOS/Linux.",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -10,28 +9,63 @@
     "./package.json": "./package.json",
     "./locale/*": "./locale/*"
   },
+  "icon": "./icon.svg",
   "dsh": {
+    "manifestVersion": 1,
     "bundle": {
-      "patch": "cordis.patch.yml"
+      "patch": "./cordis.patch.yml"
     }
   },
   "engines": {
     "node": ">=20",
-    "git": ">=2.36"
+    "dsh": ">=0.2.0-rc.1 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "^0.2.0-rc.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
   },
   "scripts": {
     "test": "node self-test.mjs && node self-test-git.mjs",
-    "probe": "node capture-git-format.mjs"
+    "probe": "node capture-git-format.mjs",
+    "prepublishOnly": "node self-test.mjs && node self-test-git.mjs"
   },
-  "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/dsh-tools": "^0.2.0-rc.1"
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek",
+    "deepseek-harness",
+    "cordis-plugin",
+    "git",
+    "commit",
+    "push",
+    "conventional-commits",
+    "tag",
+    "agent"
+  ],
+  "author": "ygzhang <ygzhang.cn@msn.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ygzhang-lab/dsh-plugin-git-commit-push.git"
+  },
+  "homepage": "https://github.com/ygzhang-lab/dsh-plugin-git-commit-push#readme",
+  "bugs": {
+    "url": "https://github.com/ygzhang-lab/dsh-plugin-git-commit-push/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "files": [
     "index.js",
     "lib",
     "cordis.patch.yml",
     "locale",
+    "icon.svg",
     "git-commit-push.config.json",
     "setup.ps1",
     "setup.sh",
@@ -40,7 +74,7 @@
     "capture-git-format.mjs",
     "e2e-check.mjs",
     "SKILL.md",
-    "README.md"
-  ],
-  "license": "MIT"
+    "README.md",
+    "README.en.md"
+  ]
 }

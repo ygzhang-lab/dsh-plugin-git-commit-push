@@ -1,13 +1,17 @@
 # The mount row this package contributes as a DSH profile bundle.
 #
 # WHY THIS FILE EXISTS
-# `package.json` declares `dsh.bundle.patch: cordis.patch.yml`. That single
+# `package.json` declares `dsh.bundle.patch: ./cordis.patch.yml`. That single
 # declaration is what makes the package a *bundle* to DSH: the launcher reads
 # this patch when the package is listed in the profile's `dsh.profile.bundles`,
 # and the plugin manager lists and manages the package only when it finds a
 # bundle declaration. Without it the package is a plain dependency — and the
 # Plugins page refuses every action with "这个包没有声明组合包，不能作为插件管理"
 # (`not-bundle`).
+#
+# The row names the package exactly as npm publishes it, so a registry install
+# (`pnpm add dsh-plugin-git-commit-push` inside the profile) mounts with no
+# further wiring; the same line serves a `link:` install from a checkout.
 #
 # WHY THE ROW LIVES HERE, NOT IN THE PROFILE PATCH
 # An earlier revision wrote this same row into the profile's own

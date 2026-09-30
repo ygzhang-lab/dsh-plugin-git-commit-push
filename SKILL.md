@@ -1,9 +1,9 @@
 ---
-name: git-commit
+name: git-commit-push
 description: 仅当用户明确要求时才使用（用户敲 /commit-push 斜杠命令，或直接说「git 提交 / 提交 / commit / 推送 / push」）。用 DSH 的 git_commit_push 工具一步完成：检查仓库、汇总改动、按 Conventional Commits 生成信息、提交、必要时询问打 tag、推送；未初始化 Git 则不做任何操作。绝不自动触发。
 ---
 
-# Skill: git-commit
+# Skill: git-commit-push
 
 ## 触发条件（硬性约束）
 

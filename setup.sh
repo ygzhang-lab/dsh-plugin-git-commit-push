@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 #
-# Install dsh-plugin-git-commit-push into the active DSH profile on macOS or
-# Linux. The Windows equivalent is setup.ps1; both do the same two things and
-# both delegate the profile-manifest edit to lib/profile-edit.mjs, so the risky
-# step is the same reviewed code on every platform.
+# Install a local CHECKOUT of dsh-plugin-git-commit-push into a DSH profile on
+# macOS or Linux. The Windows equivalent is setup.ps1; both do the same two
+# things and both delegate the profile-manifest edit to lib/profile-edit.mjs, so
+# the risky step is the same reviewed code on every platform.
 #
 #   1. links the plugin into the profile's package.json as a `link:` dependency;
 #   2. appends the package to `dsh.profile.bundles`.
+#
+# Installing from npm does not need this script: use Settings > Plugins, or
+#   dsh plugin --profile <profile> add dsh-plugin-git-commit-push
+# This script is for a checkout you are editing, which should be linked rather
+# than copied into node_modules.
 #
 # The mount row is deliberately NOT written here. It comes from the package's own
 # bundle patch (cordis.patch.yml, declared as `dsh.bundle.patch`), which the
@@ -41,7 +46,7 @@ for arg in "$@"; do
   case "$arg" in
     --uninstall|-u) uninstall=1 ;;
     --help|-h)
-      sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     -*) printf 'unknown option: %s\n' "$arg" >&2; exit 2 ;;

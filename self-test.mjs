@@ -6,10 +6,11 @@
  * The git parsers are fed byte-exact `-z` output captured from real git, so a
  * parser regression shows up here rather than as a wrong commit.
  *
- * The last section checks the packaging contract instead of the code: the
- * `dsh.bundle.patch` declaration, the mount row it points at, the display
- * metadata the Plugins page reads, and the fact that neither installer writes a
- * mount row of its own (two inserts of one id mount the plugin twice).
+ * The last two sections check the packaging contract instead of the code: the
+ * `dsh.bundle.patch` declaration and the mount row it points at, the display
+ * metadata the Plugins page reads, whether the tarball npm would publish
+ * actually carries every module the entry point imports, and the settings and
+ * skill contracts an npm install depends on.
  *
  * Run it with node (any platform):
  *
@@ -19,14 +20,17 @@
  *   & "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" self-test.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { git, parseStatusZ, tagNameError } from './lib/git.js'
 import { buildMessage, inferType, scopeOf, totalsOf, typeOfPath, declaredSymbols, removedDeclarationCount, renderCard } from './lib/analyze.js'
 import { normalizeEntries } from './lib/survey.js'
-import { parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
+import { loadSettingsReport, DEFAULTS } from './lib/config.js'
+import { parseSkillFile, skillDefinition, SKILL_PATH } from './lib/skill.js'
+import { apply, inject, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
 
 let passed = 0
 const failures = []
@@ -327,7 +331,7 @@ check('package.json declares a bundle patch', () => {
   // This one field is the difference between "a dependency" and "a bundle":
   // the launcher applies the patch for every profile that selects the package,
   // and the Plugins page refuses every action without it ("not-bundle").
-  assert.equal(bundlePatch, 'cordis.patch.yml')
+  assert.equal(bundlePatch, './cordis.patch.yml')
 })
 
 check('the declared bundle patch exists and is not empty', () => {
@@ -381,6 +385,253 @@ check('the Plugins page can resolve the manifest and locale metadata', () => {
       assert.equal(typeof value === 'string' && value.trim() !== '', true, `locale/${language}.json: meta.${field}`)
     }
   }
+})
+
+console.log('\npublish readiness (npm)')
+
+/** `files` entries are either exact files or directory prefixes. */
+function coveredByFiles(relativePath) {
+  return manifest.files.some((entry) => {
+    const clean = entry.replace(/^\.\//, '').replace(/\/+$/, '')
+    return clean === relativePath || relativePath.startsWith(`${clean}/`)
+  })
+}
+
+/** Relative module specifiers a file imports (statically or dynamically). */
+function relativeImports(file) {
+  const text = readFileSync(file, 'utf8')
+  const specifiers = []
+  for (const pattern of [
+    /\bfrom\s+['"](\.[^'"]*)['"]/gu,
+    /\bimport\s*\(\s*['"](\.[^'"]*)['"]\s*\)/gu,
+    /\bimport\s+['"](\.[^'"]*)['"]/gu,
+  ]) {
+    for (const match of text.matchAll(pattern)) specifiers.push(match[1])
+  }
+  return specifiers
+}
+
+/**
+ * Every module reachable from the entry point through relative imports.
+ *
+ * This is the check that catches the classic npm-publishing accident: a module
+ * the entry point needs is missing from the tarball because `files` forgot it,
+ * and the package installs cleanly and then fails to load.
+ */
+function moduleGraph(entry) {
+  const seen = new Set()
+  const queue = [entry]
+  while (queue.length > 0) {
+    const file = queue.pop()
+    if (seen.has(file)) continue
+    seen.add(file)
+    for (const specifier of relativeImports(file)) queue.push(resolve(dirname(file), specifier))
+  }
+  return seen
+}
+
+check('the manifest carries what npm and the Plugins page need', () => {
+  assert.equal(manifest.private, undefined, 'private: true makes the package unpublishable')
+  assert.equal(manifest.name, 'dsh-plugin-git-commit-push')
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/)
+  assert.equal(typeof manifest.description === 'string' && manifest.description.length > 20, true)
+  assert.equal(manifest.license, 'MIT')
+  assert.match(String(manifest.author), /<[^@\s]+@[^@\s]+>/, 'author should carry a contact address')
+  assert.match(manifest.repository.url, /github\.com\/ygzhang-lab\/dsh-plugin-git-commit-push/)
+  assert.equal(manifest.publishConfig.registry, 'https://registry.npmjs.org/')
+  assert.equal(manifest.publishConfig.access, 'public')
+  assert.equal(Array.isArray(manifest.keywords) && manifest.keywords.length >= 5, true)
+  assert.match(manifest.scripts.prepublishOnly, /self-test\.mjs/)
+})
+
+check('the dsh manifest follows the documented convention', () => {
+  // `dsh.manifestVersion` is the manifest-format identifier (independent of the
+  // npm version); `engines.dsh` is where an author declares compatible hosts.
+  assert.equal(manifest.dsh.manifestVersion, 1)
+  assert.equal(typeof manifest.engines.dsh, 'string')
+  assert.notEqual(manifest.engines.dsh.trim(), '')
+  assert.equal(manifest.engines.git, undefined, 'engines.git is not a field any installer reads')
+})
+
+check('no DSH peer is ever installed by the consumer', () => {
+  // The peer exists so DSH's own compatibility gate
+  // (`evaluatePluginCompatibility`) can compare the host version. The plugin
+  // imports nothing from it, so it must be optional: otherwise pnpm would try
+  // to fetch a host package into the user's profile.
+  const peers = Object.keys(manifest.peerDependencies ?? {})
+  assert.equal(peers.length > 0, true, 'the DSH compatibility gate needs a dsh- peer')
+  for (const peer of peers) {
+    assert.match(peer, /^@deepseek-ai\/dsh(-|$)/, `${peer} is not a DSH package; drop it or make it a real dependency`)
+    assert.equal(manifest.peerDependenciesMeta?.[peer]?.optional, true, `${peer} must be an optional peer`)
+  }
+})
+
+check('the icon satisfies the registry rules', () => {
+  const icon = manifest.icon
+  assert.equal(typeof icon, 'string')
+  assert.equal(/^[A-Za-z][A-Za-z\d+.-]*:/u.test(icon), false, 'icon must be a relative path')
+  assert.match(icon, /\.(svg|png|jpe?g|webp)$/u)
+  const file = resolve(PACKAGE_DIR, icon)
+  assert.equal(file.startsWith(PACKAGE_DIR), true, 'icon must stay inside the package')
+  const stat = statSync(file)
+  assert.equal(stat.isFile(), true)
+  assert.equal(stat.size <= 256 * 1024, true, 'icon exceeds the 256 KiB limit')
+})
+
+check('every file list entry exists', () => {
+  for (const entry of manifest.files) {
+    assert.equal(existsSync(join(PACKAGE_DIR, entry)), true, `files lists "${entry}", which does not exist`)
+  }
+})
+
+check('the tarball carries every module the entry point imports', () => {
+  for (const file of moduleGraph(join(PACKAGE_DIR, 'index.js'))) {
+    const relative = file.slice(PACKAGE_DIR.length + 1).replace(/\\/gu, '/')
+    assert.equal(coveredByFiles(relative), true, `files does not publish ${relative}`)
+  }
+})
+
+check('the tarball carries the files the plugin reads at runtime', () => {
+  for (const required of [
+    'SKILL.md',
+    'cordis.patch.yml',
+    'git-commit-push.config.json',
+    'icon.svg',
+    'locale/en.json',
+    'locale/zh.json',
+    'README.md',
+    'README.en.md',
+  ]) {
+    assert.equal(existsSync(join(PACKAGE_DIR, required)), true, `${required} is missing`)
+    assert.equal(coveredByFiles(required), true, `files does not publish ${required}`)
+  }
+})
+
+check('no author-machine path leaks into the published files', () => {
+  // A published README or installer that hard-codes the author's checkout is a
+  // broken instruction for everyone else.
+  const leaked = []
+  for (const entry of manifest.files) {
+    const file = join(PACKAGE_DIR, entry)
+    if (!statSync(file).isFile() || !/\.(js|mjs|json|md|ps1|sh|ya?ml)$/u.test(file)) continue
+    const text = readFileSync(file, 'utf8')
+    for (const needle of ['C:\\Users\\admin', 'D:\\Program Files', 'local-plugins\\dsh-plugin-git-commit-push']) {
+      if (text.includes(needle)) leaked.push(`${entry}: ${needle}`)
+    }
+  }
+  assert.deepEqual(leaked, [])
+})
+
+console.log('\nsettings files (npm installs live under node_modules)')
+
+const withTemporaryDshHome = async (run) => {
+  const previous = process.env.DSH_HOME
+  const home = mkdtempSync(join(tmpdir(), 'dsh-config-test-'))
+  process.env.DSH_HOME = home
+  try {
+    await run(home)
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+await checkAsync('a user config next to the DSH home wins over the shipped template', async () => {
+  await withTemporaryDshHome(async (home) => {
+    const file = join(home, 'git-commit-push.config.json')
+    writeFileSync(file, JSON.stringify({ tagPrefix: 'release-', tagOnFileCount: 3 }))
+    const report = await loadSettingsReport()
+    assert.equal(report.source, file)
+    assert.equal(report.problem, undefined)
+    assert.equal(report.settings.tagPrefix, 'release-')
+    assert.equal(report.settings.tagOnFileCount, 3)
+    assert.equal(report.settings.autoPush, DEFAULTS.autoPush, 'omitted keys keep the defaults')
+  })
+})
+
+await checkAsync('with no user config the shipped template is the source', async () => {
+  await withTemporaryDshHome(async () => {
+    const report = await loadSettingsReport()
+    assert.match(report.source, /git-commit-push\.config\.json$/)
+    assert.equal(report.source.startsWith(PACKAGE_DIR), true)
+    assert.equal(report.problem, undefined)
+  })
+})
+
+await checkAsync('a malformed user config is reported, not silently ignored', async () => {
+  await withTemporaryDshHome(async (home) => {
+    writeFileSync(join(home, 'git-commit-push.config.json'), '{ "autoPush": tru }')
+    const report = await loadSettingsReport()
+    assert.equal(report.source, join(home, 'git-commit-push.config.json'))
+    assert.match(report.problem, /不是合法的 JSON 配置/)
+    assert.equal(report.settings.autoPush, DEFAULTS.autoPush)
+  })
+})
+
+console.log('\nthe embedded skill')
+
+check('the shipped SKILL.md parses into a valid runtime skill', () => {
+  const skill = skillDefinition()
+  assert.notEqual(skill, undefined, 'SKILL.md is missing or unusable')
+  // The registry's own rules (see `validateRuntimeSkill` in @deepseek-ai/dsh-skill).
+  assert.match(skill.name, /^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+  assert.equal(typeof skill.description, 'string')
+  assert.equal(skill.description.length > 0, true)
+  assert.equal(typeof skill.content, 'string')
+  assert.equal(skill.content.length > 0, true)
+  assert.equal(skill.content.startsWith('---'), false, 'the frontmatter must not reach the model as instructions')
+  assert.deepEqual(skill.invocation, { modelInvocable: true, userInvocable: false })
+  assert.equal(skill.source, manifest.name)
+  assert.equal(skill.provider, undefined, 'the registry fills in the runtime provider label')
+})
+
+check('the skill name and description come from SKILL.md, not from a copy', () => {
+  const { fields } = parseSkillFile(readFileSync(SKILL_PATH, 'utf8'))
+  const skill = skillDefinition()
+  assert.equal(skill.name, fields.name)
+  assert.equal(skill.description, fields.description)
+  // The skill is named after the plugin: one name for the tool surface, the
+  // command, the skill and the npm package, so nothing has to be looked up
+  // under two different names.
+  assert.equal(fields.name, 'git-commit-push')
+  assert.equal(fields.name, manifest.name.replace(/^dsh-plugin-/u, ''))
+})
+
+check('apply registers the tool, the command and the skill', () => {
+  const registered = { tools: [], commands: [], skills: [] }
+  const services = {
+    commands: { register: (command) => registered.commands.push(command) },
+    skills: { register: (skill) => registered.skills.push(skill) },
+  }
+  apply({
+    tools: { register: (definition) => registered.tools.push(definition) },
+    // `inject` mirrors the Cordis scoped context: the callback runs only when
+    // the service is present.
+    inject: (names, callback) => {
+      for (const service of names) callback({ get: () => services[service] })
+    },
+    logger: { warn: () => {} },
+  })
+  assert.deepEqual(registered.tools.map(tool => tool.name), ['git_commit_push'])
+  assert.deepEqual(registered.commands.map(command => command.name), ['commit-push'])
+  assert.deepEqual(registered.skills.map(skill => skill.name), ['git-commit-push'])
+})
+
+check('the optional services stay optional in the static inject list', () => {
+  // Putting skills/commands in `inject` would block the whole plugin — and
+  // therefore the tool — on a host that has no such surface.
+  assert.deepEqual(inject, ['tools'])
+})
+
+check('apply survives a host with no command and no skill surface', () => {
+  let registered = 0
+  apply({
+    tools: { register: () => { registered += 1 } },
+    inject: () => {},
+    logger: { warn: () => {} },
+  })
+  assert.equal(registered, 1)
 })
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`)
