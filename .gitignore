@@ -1,0 +1,28 @@
+# Dependencies. This plugin deliberately has none at runtime, so a node_modules
+# here would only ever be a local experiment.
+node_modules/
+
+# Installer backups and local snapshots. The install scripts write these next to
+# the FILES THEY EDIT (the DSH profile), but a copy can land here if someone runs
+# a script from inside this directory.
+*.bak
+*.bak-*
+*.pre-install-*
+
+# Editor and OS noise.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Logs and scratch output.
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Note: lib/git.js is a tracked file, NOT git's metadata. If a bare `git` entry
+# is ever added here, use `git` and not `git/`, and re-check with
+# `git check-ignore -v lib/git.js` — silently dropping the only file that talks
+# to git would break the plugin in a way no test in this repo could catch.

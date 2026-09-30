@@ -1,0 +1,37 @@
+{
+  "name": "dsh-plugin-git-commit-push",
+  "version": "1.0.0",
+  "private": true,
+  "description": "One-call Conventional-Commits git workflow for DSH: survey + commit + optional tag + push, plus a /commit-push slash command that runs with no model involvement. Windows and macOS/Linux.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "engines": {
+    "node": ">=20",
+    "git": ">=2.36"
+  },
+  "scripts": {
+    "test": "node self-test.mjs && node self-test-git.mjs",
+    "probe": "node capture-git-format.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-tools": "^0.2.0-rc.1"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "git-commit-push.config.json",
+    "setup.ps1",
+    "setup.sh",
+    "self-test.mjs",
+    "self-test-git.mjs",
+    "capture-git-format.mjs",
+    "e2e-check.mjs",
+    "SKILL.md",
+    "README.md"
+  ],
+  "license": "MIT"
+}

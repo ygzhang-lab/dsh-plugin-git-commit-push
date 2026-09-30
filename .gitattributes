@@ -1,0 +1,41 @@
+# Normalize every text file to LF in the repository.
+#
+# This is not cosmetic for this project: the test suite compares byte-exact git
+# output, and more importantly a Windows checkout with CRLF must not change how
+# the plugin behaves for a macOS user. Forcing LF in the blob means the working
+# tree differs between platforms only by the platform's own convention, and
+# `git status` stays quiet for everyone.
+* text=auto eol=lf
+
+# Anything binary must never be text-normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.zip binary
+*.gz binary
+
+# Explicit: shell scripts must keep LF, or they fail on macOS/Linux with
+# "bad interpreter: No such file or directory" (the CR becomes part of the path).
+*.sh text eol=lf
+
+# NOTE: PowerShell scripts are deliberately NOT given `eol=crlf`. Every file in
+# this repository is LF in the blob and in the working tree. A `*.ps1 eol=crlf`
+# rule would leave the file LF on disk while the attribute promised CRLF, so
+# `git status` would report a modification the moment anything re-read the file.
+# One convention for the whole repo is the only self-consistent choice, and
+# PowerShell reads LF scripts without complaint.
+
+# Git's own machinery.
+.gitattributes text
+.gitignore text
+
+# Make reviews readable for the generated JSON.
+*.json text eol=lf
+*.yml text eol=lf
+*.md text eol=lf

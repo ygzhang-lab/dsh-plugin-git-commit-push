@@ -1,0 +1,17 @@
+{
+  "$comment": "Settings for dsh-plugin-git-commit-push. Edit this file and the next tool call picks the values up; no DSH restart required. A missing file falls back to the defaults below.",
+  "autoPush": true,
+  "autoAdd": true,
+  "tagOnVersionChange": true,
+  "tagOnFileCount": 10,
+  "tagOnBreaking": true,
+  "tagPrefix": "v",
+  "askBeforeTag": true,
+  "askTimeoutMs": 120000,
+  "defaultLanguage": "zh",
+  "maxFilesShown": 12,
+  "pinnedIdentity": {
+    "name": "",
+    "email": ""
+  }
+}
