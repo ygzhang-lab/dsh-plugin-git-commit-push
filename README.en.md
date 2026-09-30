@@ -2,25 +2,19 @@
 
 English | [中文](README.md)
 
-A one-call "commit + push" plugin for DSH (DeepSeek Harness): the whole workflow a model would otherwise
-run through ten-odd shell calls and several screens of raw git output becomes **1–2 tool calls and one
-compact card** — and the slash-command path costs **zero model tokens**. It is the tool-ified replacement
-for the early `.agents/skills/git-commit` skill; the skill that ships with the package is named
-`git-commit-push`.
+DSH (DeepSeek Harness) Git commit and push plugin, one call to complete: summarize changes, automatically generate commit messages for each changed file according to Conventional Commits, ask for tagging if necessary, and then push to the Git remote repository configured for the current project.
 
-```
-changes → git_commit_push(prepare)          ← one card, no diff
-        → you write the Conventional Commits message
-        → git_commit_push(apply, message)   → commit / tag question / push, one result card
-```
+- Users can complete a commit and push with just a 0 Token through the `/git-commit-push` slash command (without going through the model, as the script automatically generates simple and clear commits according to the rules);
+- DSH can utilize the `git_commit_push` tool, requiring minimal tokens to accomplish high-quality annotations and complete a single commit and push.
+  This plugin serves as a tool-based replacement for the earlier `.agents/skills/git-commit-push` Skill. It condenses the process of running dozens of Shell scripts and reading through a pile of raw Git output, which is typically required for pure Skill work, into **1-2 tool invocations + a compact card**.
 
 Installing gives you three surfaces:
 
-| Surface | Name | Used by |
-|---|---|---|
-| Tool | `git_commit_push` (`prepare` / `apply` / `auto`) | the model |
-| Slash command | `/git-commit-push` | you, **with no model round-trip at all** |
-| Skill | `git-commit-push` | the model, loading the full procedure on demand |
+| Surface       | Name                                             | Used by                                         |
+| ------------- | ------------------------------------------------ | ----------------------------------------------- |
+| Tool          | `git_commit_push` (`prepare` / `apply` / `auto`) | the model                                       |
+| Slash command | `/git-commit-push`                               | you, **with no model round-trip at all**        |
+| Skill         | `git-commit-push`                                | the model, loading the full procedure on demand |
 
 - Platforms: **Windows and macOS / Linux** (see "Platforms")
 - Requirements: DSH `>=0.2.0-rc.1 <0.3.0`, Node `>=20`, git `>=2.36`
@@ -36,7 +30,7 @@ dsh-plugin-git-commit-push
 ```
 
 Then **restart DSH**. The same page can **enable / disable / uninstall** it — which is exactly why this
-package declares `dsh.bundle.patch` and makes itself a DSH *bundle*. Without that declaration the page
+package declares `dsh.bundle.patch` and makes itself a DSH _bundle_. Without that declaration the page
 answers every request with **"这个包没有声明组合包，不能作为插件管理"** (host code `not-bundle`).
 
 ### B. Command line
@@ -95,7 +89,7 @@ Once DSH is restarted:
 triggers.** Editing files is not a request to commit them. When in doubt, ask instead of committing.
 
 The rule is stated in three model-visible places: the `git_commit_push` tool description (the first thing
-a model reads when choosing a tool), [SKILL.md](<./SKILL.md>) (registered as an embedded skill at mount
+a model reads when choosing a tool), [SKILL.md](./SKILL.md) (registered as an embedded skill at mount
 time), and the command description. The plugin cannot enforce it inside `execute` — by then the decision
 has already been made.
 
@@ -103,11 +97,11 @@ has already been made.
 
 **Partly — it needs qualification.** The honest split is by path:
 
-| Path | Model tokens | Why |
-|---|---|---|
-| **1. `/git-commit-push` slash command** | **0 (really)** | No model request is made at all. Command discovery, execution and UI output cost no model tokens, and the result is rendered in the UI only — it never enters the transcript. This is the **only** truly 0-token path. |
-| **2. `git_commit_push(auto)` tool call** | a few | The model has to emit the call (arguments + thinking). The plugin writes the message itself, so there is **no** second round-trip; the card is ~200 tokens. One round trip. |
-| **3. `prepare` + `apply` (default)** | ~2 round trips | Only the `prepare` card (~200 tokens) and the `apply` `message` argument enter the context — **no diff is read**. |
+| Path                                     | Model tokens   | Why                                                                                                                                                                                                                    |
+| ---------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1. `/git-commit-push` slash command**  | **0 (really)** | No model request is made at all. Command discovery, execution and UI output cost no model tokens, and the result is rendered in the UI only — it never enters the transcript. This is the **only** truly 0-token path. |
+| **2. `git_commit_push(auto)` tool call** | a few          | The model has to emit the call (arguments + thinking). The plugin writes the message itself, so there is **no** second round-trip; the card is ~200 tokens. One round trip.                                            |
+| **3. `prepare` + `apply` (default)**     | ~2 round trips | Only the `prepare` card (~200 tokens) and the `apply` `message` argument enter the context — **no diff is read**.                                                                                                      |
 
 So: "the slash command costs 0 tokens" is accurate; "the tool costs 0 tokens" is **not** — the model still
 pays for each call. What the plugin saves is **comparative**: reading raw git output (thousands of tokens →
@@ -160,12 +154,12 @@ And after a commit:
 
 Four outcomes are unmistakable, so a card can no longer be mistaken for "nothing happened":
 
-| First line | Meaning |
-|---|---|
-| `✅ **Git 提交并推送成功**` | committed and pushed |
-| `✅ **Git 提交成功（未推送）**` | committed; `autoPush` is off or this call said `--no-push` |
-| `⚠️ **已提交，但推送失败**` | the commit is local, the push failed (reason in `说明：`) |
-| `❌ **提交失败**` | nothing was committed; your changes are untouched in the working tree |
+| First line                      | Meaning                                                               |
+| ------------------------------- | --------------------------------------------------------------------- |
+| `✅ **Git 提交并推送成功**`     | committed and pushed                                                  |
+| `✅ **Git 提交成功（未推送）**` | committed; `autoPush` is off or this call said `--no-push`            |
+| `⚠️ **已提交，但推送失败**`     | the commit is local, the push failed (reason in `说明：`)             |
+| `❌ **提交失败**`               | nothing was committed; your changes are untouched in the working tree |
 
 Other states: `ℹ️ **没有需要提交的改动**`, `⚠️ **当前目录不是 Git 仓库**` (with the candidate repositories listed),
 `❌ **未初始化 Git**`, `❌ **找不到 git**`.
@@ -191,7 +185,7 @@ feat(api): 更新 decideRetry
 - A **single-file commit has no body** — its subject says it all.
 - The body names at most `maxFilesShown` files (12 by default); the rest collapse into `- …另有 N 个文件`.
 
-(Card text is localized: `defaultLanguage: "zh"` or `"en"` — including the per-file notes. The card *format* is
+(Card text is localized: `defaultLanguage: "zh"` or `"en"` — including the per-file notes. The card _format_ is
 Chinese-and-English-mixed by design: the verdict line and labels are Chinese in both locales, the file notes follow
 the message language.)
 
@@ -205,33 +199,33 @@ does not remount the plugin and needs no DSH restart: it takes effect on the nex
 
 **Three sources, highest first:**
 
-| Layer | Location | Written by |
-|---|---|---|
-| 1 | the row's `config` (the profile's `cordis.patch.yml`) | DSH's settings form |
-| 2 | `<DSH_HOME>/git-commit-push.config.json` (default `~/.dsh/git-commit-push.config.json`) | you, by hand; the fallback for `link:`/offline installs |
-| 3 | the shipped template `git-commit-push.config.json` | the package |
-| — | built-in defaults | whatever none of the above sets |
+| Layer | Location                                                                                | Written by                                              |
+| ----- | --------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| 1     | the row's `config` (the profile's `cordis.patch.yml`)                                   | DSH's settings form                                     |
+| 2     | `<DSH_HOME>/git-commit-push.config.json` (default `~/.dsh/git-commit-push.config.json`) | you, by hand; the fallback for `link:`/offline installs |
+| 3     | the shipped template `git-commit-push.config.json`                                      | the package                                             |
+| —     | built-in defaults                                                                       | whatever none of the above sets                         |
 
 A missing file is not an error. A file that exists but is not valid JSON is **reported** — the result card
 gains a "配置未生效: …" line rather than silently doing nothing. Omitted keys keep their defaults.
 
-| Key | Default | Meaning | In the form |
-|---|---|---|---|
-| `autoPush` | `true` | push after a successful commit | ✅ |
-| `autoAdd` | `true` | `git add -A` before committing | ✅ |
-| `tagOnVersionChange` | `true` | ask about a tag when a version file changed | ✅ |
-| `tagOnBreaking` | `true` | ask when a public declaration was removed | ✅ |
-| `tagOnFileCount` | `10` | ask when ≥ N files changed (`0` disables) | ✅ |
-| `tagPrefix` | `"v"` | suggested tag prefix | ✅ |
-| `askBeforeTag` | `true` | `false` tags silently (the only "no question" switch) | ✅ |
-| `askTimeoutMs` | `120000` | how long the tag question waits | ✅ |
-| `defaultLanguage` | `"zh"` | language of the generated message (`zh`/`en`) | ✅ |
-| `maxFilesShown` | `12` | how many paths the card lists | ✅ |
-| `pinnedIdentity.name/email` | empty | applied per commit with `-c user.name/-c user.email`; your git config is never written | ✅ |
+| Key                         | Default  | Meaning                                                                                | In the form |
+| --------------------------- | -------- | -------------------------------------------------------------------------------------- | ----------- |
+| `autoPush`                  | `true`   | push after a successful commit                                                         | ✅          |
+| `autoAdd`                   | `true`   | `git add -A` before committing                                                         | ✅          |
+| `tagOnVersionChange`        | `true`   | ask about a tag when a version file changed                                            | ✅          |
+| `tagOnBreaking`             | `true`   | ask when a public declaration was removed                                              | ✅          |
+| `tagOnFileCount`            | `10`     | ask when ≥ N files changed (`0` disables)                                              | ✅          |
+| `tagPrefix`                 | `"v"`    | suggested tag prefix                                                                   | ✅          |
+| `askBeforeTag`              | `true`   | `false` tags silently (the only "no question" switch)                                  | ✅          |
+| `askTimeoutMs`              | `120000` | how long the tag question waits                                                        | ✅          |
+| `defaultLanguage`           | `"zh"`   | language of the generated message (`zh`/`en`)                                          | ✅          |
+| `maxFilesShown`             | `12`     | how many paths the card lists                                                          | ✅          |
+| `pinnedIdentity.name/email` | empty    | applied per commit with `-c user.name/-c user.email`; your git config is never written | ✅          |
 
 > Where exactly the form lives depends on your DSH version (the plugins/config entry in Settings). The
 > **Settings → Plugins → Plugin list** tab is explicitly **read-only** (it lets users inspect plugins
-> *without changing their configuration*); the editable form comes from the settings service. Field
+> _without changing their configuration_); the editable form comes from the settings service. Field
 > descriptions are Chinese, matching the default message language — DSH has no per-field localization yet.
 
 **Why a JSON file still exists**: the `Config` schema needs `@deepseek-ai/schemastery`, declared here as an
@@ -245,7 +239,7 @@ where the user settings file lives.
 
 ## The `git-commit-push` skill
 
-[SKILL.md](<./SKILL.md>) is registered as an **embedded skill** (`ctx.skills.register(...)`) when the
+[SKILL.md](./SKILL.md) is registered as an **embedded skill** (`ctx.skills.register(...)`) when the
 plugin mounts, so there is nothing to copy into a skills directory after an npm install. The skill name
 matches the package name (minus the `dsh-plugin-` prefix): the tool, the command, the skill and the npm
 package share one name instead of two.
@@ -256,7 +250,7 @@ package share one name instead of two.
   capabilities** (awaited through a scoped `ctx.inject`), and losing either never affects the
   `git_commit_push` tool.
 - **Coming from an early revision**: if you manually installed the old SKILL.md into
-  `~/.agents/skills/git-commit/`, that is a user-level skill under a *different* name and will appear next
+  `~/.agents/skills/git-commit/`, that is a user-level skill under a _different_ name and will appear next
   to the bundled `git-commit-push`. The package now owns that content, so deleting that directory is
   recommended (or keep it and put your own rules there — different names, so neither shadows the other).
 
@@ -264,7 +258,7 @@ package share one name instead of two.
 
 **Never**: modify `.gitignore`, write git config (including `user.name`/`user.email`), `push --force`,
 `reset --hard`, `git clean`, `checkout -- <path>`, or `commit --no-verify`.
-[lib/git.js](<./lib/git.js>) is the only place that talks to git and its command set is fixed — adding a
+[lib/git.js](./lib/git.js) is the only place that talks to git and its command set is fixed — adding a
 destructive verb means changing that file first.
 
 **Handled automatically**: `push -u origin <branch>` when there is no upstream; a rejected push
@@ -283,12 +277,12 @@ failure from "this is not a repository".
 
 ## Platforms
 
-| Capability | Windows | macOS / Linux |
-|---|---|---|
-| Runtime (the plugin itself) | ✅ | ✅ audited: no missed platform branch |
-| Installers (path C) | `setup.ps1` (PowerShell) | `setup.sh` (POSIX sh) |
-| Uninstall | `setup.ps1 -Uninstall` | `setup.sh <profile> --uninstall` |
-| Profile manifest edit | both call the same `lib/profile-edit.mjs` | same |
+| Capability                  | Windows                                   | macOS / Linux                         |
+| --------------------------- | ----------------------------------------- | ------------------------------------- |
+| Runtime (the plugin itself) | ✅                                        | ✅ audited: no missed platform branch |
+| Installers (path C)         | `setup.ps1` (PowerShell)                  | `setup.sh` (POSIX sh)                 |
+| Uninstall                   | `setup.ps1 -Uninstall`                    | `setup.sh <profile> --uninstall`      |
+| Profile manifest edit       | both call the same `lib/profile-edit.mjs` | same                                  |
 
 Audit notes for `index.js` + `lib/*`:
 
@@ -476,4 +470,4 @@ npm publish                    # publishConfig pins the registry to registry.npm
 
 ## License
 
-MIT © ygzhang-lab. See [LICENSE](<./LICENSE>).
+MIT © ygzhang-lab. See [LICENSE](./LICENSE).

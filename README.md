@@ -1,24 +1,20 @@
 # dsh-plugin-git-commit-push
 
 [English](README.en.md) | 中文
+DSH（DeepSeek Harness）Git 提交推送插件，一次调用完成：汇总改动，按 Conventional Commits 为每个变更文件自动生成提交信息，必要时询问打标签，然后推送到当前项目配置的 Git 远程仓库。
 
-一次工具调用完成「提交 + 推送」的 DSH（DeepSeek Harness）插件：把原本需要模型跑十来条 shell、
-读一堆 git 原始输出的流程，压成 **1–2 次工具调用 + 一张紧凑卡片**，斜杠命令路径则是真正的 **0 token**。
-它是早期 `.agents/skills/git-commit` 那个 Skill 的工具化替代；随包出货的 Skill 现在统一叫 `git-commit-push`。
+- 用户可通过 `/git-commit-push` 斜杠命令, 0 Token 即可完成一次提交与推送(不经过模型，脚本自动按规则生成简单明了的 Commits )；
+- DSH 可使用 `git_commit_push` 工具, 极少 Token 即可完成高质量的注释和一次提交与推送。
 
-```
-改动 → git_commit_push(prepare)          ← 一张卡片，不含 diff
-     → 你写 Conventional Commits 信息
-     → git_commit_push(apply, message)   → 提交 / tag 询问 / 推送，一张结果卡片
-```
+本插件是早期 `.agents/skills/git-commit-push` 这个 Skill 的工具化替代，把纯 Skill 工作需要模型跑十来条 Shell，读一堆 Git 原始输出的流程，压成 **1–2 次工具调用 + 一张紧凑卡片**。
 
 装好之后你得到三样东西：
 
-| 表面 | 名字 | 谁用它 |
-|---|---|---|
-| 工具 | `git_commit_push`（`prepare` / `apply` / `auto`） | 模型 |
-| 斜杠命令 | `/git-commit-push` | 人，**完全不经过模型** |
-| Skill | `git-commit-push` | 模型，按需加载的完整流程说明 |
+| 表面     | 名字                                              | 谁用它                       |
+| -------- | ------------------------------------------------- | ---------------------------- |
+| 工具     | `git_commit_push`（`prepare` / `apply` / `auto`） | 模型                         |
+| 斜杠命令 | `/git-commit-push`                                | 人，**完全不经过模型**       |
+| Skill    | `git-commit-push`                                 | 模型，按需加载的完整流程说明 |
 
 - 平台：**Windows 与 macOS / Linux 都可用**（见「跨平台」）
 - 要求：DSH `>=0.2.0-rc.1 <0.3.0`、Node `>=20`、git `>=2.36`
@@ -92,18 +88,18 @@ sh setup.sh web --uninstall
 拿不准时先问一句，而不是直接提交。
 
 这条规则写在三个模型可见的位置：`git_commit_push` 的工具描述（模型选工具时读到的第一手信息）、
-随包出货的 [SKILL.md](<./SKILL.md>)（挂载时注册为嵌入式 skill），以及命令自身的描述。
+随包出货的 [SKILL.md](./SKILL.md)（挂载时注册为嵌入式 skill），以及命令自身的描述。
 插件无法在 `execute` 内强制执行该规则——调用发生时决定已经做出。
 
 ## 「0 token 完成 commit push」这个表述准确吗？
 
 **部分准确，需要限定。** 准确的划分是「哪条路径、消耗什么」：
 
-| 路径 | 模型 token | 说明 |
-|---|---|---|
-| **1. 斜杠命令 `/git-commit-push`** | **0（真的 0）** | 完全不产生模型请求。命令的发现、执行与 UI 输出**不产生模型 token**，结果只渲染在 UI 里、**不进对话历史**。这是**唯一**真正 0 token 的路径。 |
-| **2. 工具 `git_commit_push(auto)`** | 少量 | 模型要生成这次工具调用（参数 + 思考）。提交信息由插件自己写，所以**没有**第二轮；返回卡片约 200 token。一次往返。 |
-| **3. 工具 `prepare` + `apply`（默认）** | 约 2 次往返 | 只有 `prepare` 卡片（约 200 token）和 `apply` 的 `message` 参数进上下文，**不读 diff**。 |
+| 路径                                    | 模型 token      | 说明                                                                                                                                        |
+| --------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1. 斜杠命令 `/git-commit-push`**      | **0（真的 0）** | 完全不产生模型请求。命令的发现、执行与 UI 输出**不产生模型 token**，结果只渲染在 UI 里、**不进对话历史**。这是**唯一**真正 0 token 的路径。 |
+| **2. 工具 `git_commit_push(auto)`**     | 少量            | 模型要生成这次工具调用（参数 + 思考）。提交信息由插件自己写，所以**没有**第二轮；返回卡片约 200 token。一次往返。                           |
+| **3. 工具 `prepare` + `apply`（默认）** | 约 2 次往返     | 只有 `prepare` 卡片（约 200 token）和 `apply` 的 `message` 参数进上下文，**不读 diff**。                                                    |
 
 所以：
 
@@ -160,12 +156,12 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不
 
 四种结果一眼可辨，不会再出现「卡片只有一行、以为没干活」：
 
-| 首行 | 含义 |
-|---|---|
-| `✅ **Git 提交并推送成功**` | 提交也推送了 |
+| 首行                            | 含义                                        |
+| ------------------------------- | ------------------------------------------- |
+| `✅ **Git 提交并推送成功**`     | 提交也推送了                                |
 | `✅ **Git 提交成功（未推送）**` | 提交成功，`autoPush` 关闭或本次 `--no-push` |
-| `⚠️ **已提交，但推送失败**` | 提交在本地，推送失败（`说明：` 里有原因）|
-| `❌ **提交失败**` | 提交没成功，改动原样留在工作区 |
+| `⚠️ **已提交，但推送失败**`     | 提交在本地，推送失败（`说明：` 里有原因）   |
+| `❌ **提交失败**`               | 提交没成功，改动原样留在工作区              |
 
 其他状态：`ℹ️ **没有需要提交的改动**`、`⚠️ **当前目录不是 Git 仓库**`（并列出候选仓库）、`❌ **未初始化 Git**`、`❌ **找不到 git**`。
 
@@ -196,32 +192,32 @@ DSH 的 settings 服务据此自动生成一个命名空间，设置页把它渲
 
 **三层来源，自上而下覆盖：**
 
-| 层 | 位置 | 谁写它 |
-|---|---|---|
-| 1 | 挂载行的 `config`（profile 的 `cordis.patch.yml`） | DSH 设置页的表单 |
-| 2 | `<DSH_HOME>/git-commit-push.config.json`（默认 `~/.dsh/git-commit-push.config.json`） | 你自己编辑；`link:`/离线安装的兜底 |
-| 3 | 包内模板 `git-commit-push.config.json` | 随包出货 |
-| — | 内置默认值 | 兜住以上都没设的字段 |
+| 层  | 位置                                                                                  | 谁写它                             |
+| --- | ------------------------------------------------------------------------------------- | ---------------------------------- |
+| 1   | 挂载行的 `config`（profile 的 `cordis.patch.yml`）                                    | DSH 设置页的表单                   |
+| 2   | `<DSH_HOME>/git-commit-push.config.json`（默认 `~/.dsh/git-commit-push.config.json`） | 你自己编辑；`link:`/离线安装的兜底 |
+| 3   | 包内模板 `git-commit-push.config.json`                                                | 随包出货                           |
+| —   | 内置默认值                                                                            | 兜住以上都没设的字段               |
 
 文件缺失不是错误（用默认值）；文件存在但不是合法 JSON 时，结果卡片里会追加一行
 「配置未生效：…」，而不是静默忽略。没写的键保持默认值。
 
-| 键 | 默认 | 说明 | 表单 |
-|---|---|---|---|
-| `autoPush` | `true` | 提交后推送 | ✅ |
-| `autoAdd` | `true` | 提交前 `git add -A` | ✅ |
-| `tagOnVersionChange` | `true` | 版本文件变动 → 询问打 tag | ✅ |
-| `tagOnBreaking` | `true` | 检测到公共声明被删除 → 询问 | ✅ |
-| `tagOnFileCount` | `10` | 改动文件数 ≥ N → 询问（`0` 关闭）| ✅ |
-| `tagPrefix` | `"v"` | 建议标签前缀 | ✅ |
-| `askBeforeTag` | `true` | `false` 则不问，直接打建议标签（唯一会「不问就打」的开关）| ✅ |
-| `askTimeoutMs` | `120000` | 标签询问等待上限 | ✅ |
-| `defaultLanguage` | `"zh"` | 规则生成信息的语言（`zh`/`en`）| ✅ |
-| `maxFilesShown` | `12` | 卡片最多列几个文件 | ✅ |
-| `pinnedIdentity.name/email` | 空 | 非空时以 `-c user.name/-c user.email` **仅对本次提交**生效；不改你的 git 配置 | ✅ |
+| 键                          | 默认     | 说明                                                                          | 表单 |
+| --------------------------- | -------- | ----------------------------------------------------------------------------- | ---- |
+| `autoPush`                  | `true`   | 提交后推送                                                                    | ✅   |
+| `autoAdd`                   | `true`   | 提交前 `git add -A`                                                           | ✅   |
+| `tagOnVersionChange`        | `true`   | 版本文件变动 → 询问打 tag                                                     | ✅   |
+| `tagOnBreaking`             | `true`   | 检测到公共声明被删除 → 询问                                                   | ✅   |
+| `tagOnFileCount`            | `10`     | 改动文件数 ≥ N → 询问（`0` 关闭）                                             | ✅   |
+| `tagPrefix`                 | `"v"`    | 建议标签前缀                                                                  | ✅   |
+| `askBeforeTag`              | `true`   | `false` 则不问，直接打建议标签（唯一会「不问就打」的开关）                    | ✅   |
+| `askTimeoutMs`              | `120000` | 标签询问等待上限                                                              | ✅   |
+| `defaultLanguage`           | `"zh"`   | 规则生成信息的语言（`zh`/`en`）                                               | ✅   |
+| `maxFilesShown`             | `12`     | 卡片最多列几个文件                                                            | ✅   |
+| `pinnedIdentity.name/email` | 空       | 非空时以 `-c user.name/-c user.email` **仅对本次提交**生效；不改你的 git 配置 | ✅   |
 
 > 表单所在的具体位置取决于你的 DSH 版本（设置里的插件/配置入口）。**设置 → 插件 → 插件列表**那个标签是**只读**的
-> （官方描述：inspect plugins *without changing their configuration*），可编辑的表单来自 settings 服务那条路径。
+> （官方描述：inspect plugins _without changing their configuration_），可编辑的表单来自 settings 服务那条路径。
 > 字段说明是中文（提交信息的默认语言），DSH 目前没有按字段本地化。
 
 **为什么还需要 JSON 文件**：`Config` schema 需要 `@deepseek-ai/schemastery`。本包把它声明为**普通依赖**，
@@ -235,7 +231,7 @@ npm 安装时随包装上；而 `link:`（源码 checkout）安装时 pnpm 不�
 
 ## Skill `git-commit-push`
 
-包里的 [SKILL.md](<./SKILL.md>) 在插件挂载时会注册成**嵌入式 skill**（`ctx.skills.register(...)`），
+包里的 [SKILL.md](./SKILL.md) 在插件挂载时会注册成**嵌入式 skill**（`ctx.skills.register(...)`），
 所以装完即用，不需要你手工往技能目录里拷文件。skill 名与包名一致（`dsh-plugin-` 前缀之外的部分）：
 工具、命令、skill、npm 包只用一个名字，不必记两套。
 
@@ -250,7 +246,7 @@ npm 安装时随包装上；而 `link:`（源码 checkout）安装时 pnpm 不�
 ## 安全边界
 
 **绝不**：修改 `.gitignore`、改 git config（含 `user.name`/`user.email` 的写入）、`push --force`、`reset --hard`、`git clean`、`checkout -- <path>`、`commit --no-verify`。
-[lib/git.js](<./lib/git.js>) 是唯一与 git 对话的地方，动词表是固定的——想加破坏性命令，得先改那里。
+[lib/git.js](./lib/git.js) 是唯一与 git 对话的地方，动词表是固定的——想加破坏性命令，得先改那里。
 
 **自动处理**：无 upstream 时 `push -u origin <当前分支>`；推送被拒（远程有新提交）时 `pull --rebase` 后重推一次；rebase 冲突则**只 abort 本次自己启动的 rebase**（先探测 `rebase-merge`/`rebase-apply`，绝不丢弃你原有的 rebase 进度）并如实报告；tag 已存在或名字非法则跳过并说明。
 
@@ -260,12 +256,12 @@ npm 安装时随包装上；而 `link:`（源码 checkout）安装时 pnpm 不�
 
 ## 跨平台
 
-| 能力 | Windows | macOS / Linux |
-|---|---|---|
-| 运行时（插件本体） | ✅ | ✅ 已审计：无遗漏的平台分支 |
-| 安装脚本（方式 C） | `setup.ps1`（PowerShell） | `setup.sh`（POSIX sh） |
-| 卸载 | `setup.ps1 -Uninstall` | `setup.sh <profile> --uninstall` |
-| profile 清单编辑 | 两者调用同一个 `lib/profile-edit.mjs` | 同 |
+| 能力               | Windows                               | macOS / Linux                    |
+| ------------------ | ------------------------------------- | -------------------------------- |
+| 运行时（插件本体） | ✅                                    | ✅ 已审计：无遗漏的平台分支      |
+| 安装脚本（方式 C） | `setup.ps1`（PowerShell）             | `setup.sh`（POSIX sh）           |
+| 卸载               | `setup.ps1 -Uninstall`                | `setup.sh <profile> --uninstall` |
+| profile 清单编辑   | 两者调用同一个 `lib/profile-edit.mjs` | 同                               |
 
 运行时跨平台审计结果（`index.js` + `lib/*`）：
 
@@ -383,4 +379,4 @@ npm publish                    # publishConfig 已把 registry 固定为 registr
 
 ## 许可
 
-MIT © ygzhang-lab。见 [LICENSE](<./LICENSE>)。
+MIT © ygzhang-lab。见 [LICENSE](./LICENSE)。
