@@ -26,7 +26,7 @@ description: 仅当用户明确要求时才使用（用户敲 /git-commit-push �
 
 动作由 **`git_commit_push` 工具**（DSH 插件 `dsh-plugin-git-commit-push`）完成，**不要**自己敲 `git status` / `git add` / `git commit` / `git push`。
 
-插件在 Host 进程内直接读仓库，只回传一张紧凑卡片（改动文件、行数统计、推断的 type/scope、近几条提交风格、拟定信息）。
+插件在 Host 进程内直接读仓库，只回传一张紧凑卡片（改动文件、行数统计、推断的 type/scope、近几条提交风格、每个文件自己的拟定注释、以及整体拟定标题）。
 所以**不要**读 diff、不要读 `.gitignore`、不要查 `git log` —— 卡片里已经有了，那些输出只会白烧 token。
 tag 询问也由插件内置完成（选项框直接弹给用户，不消耗 token），**不要**再用 `ask_user_question` 问 tag。
 
@@ -41,9 +41,10 @@ tag 询问也由插件内置完成（选项框直接弹给用户，不消耗 tok
 **默认（推荐，质量最好）**：两步入
 
 1. `git_commit_push({ action: "prepare" })` — 只汇总，不改仓库。
-2. 依据卡片里的改动内容与最近提交风格，写一条 Conventional Commits 信息，然后
+2. 卡片里每个文件后面都跟着**它自己的拟定注释**（`→ feat(api): 更新 decideRetry`）。你只需要写**标题**，然后
    `git_commit_push({ action: "apply", message: "<type>(<scope>): <中文简述>" })`。
-   需要多行 body 时，把首行作 subject、后续行作 body，一起放进 `message`。
+   插件会自动把这些逐文件注释作为正文补上——**不要**再把每个文件的注释抄进 `message`。
+   确实想自己写正文时，把首行作 subject、后续行作 body 一起放进 `message`（此时插件不再添加任何注释）。
 
 **极简（用户说得很随意，如「提一下」）**：`git_commit_push({ action: "auto" })` — 直接用规则生成的信息提交。
 
@@ -51,8 +52,20 @@ tag 询问也由插件内置完成（选项框直接弹给用户，不消耗 tok
 
 ## 提交信息规范
 
-格式 `<type>(<scope>): <subject>`，subject 用简体中文，与仓库既有风格一致。类型：`feat` 新功能、`fix` 修复、`docs` 文档、`style` 样式、`refactor` 重构、`perf` 性能、`test` 测试、`build` 构建、`ci` CI、`chore` 杂项。
-破坏性变更在 body 里补一行 `BREAKING CHANGE: ...`。
+**标题一行**：`<type>(<scope>): <subject>`，subject 用简体中文，与仓库既有风格一致。类型：`feat` 新功能、`fix` 修复、`docs` 文档、`style` 样式、`refactor` 重构、`perf` 性能、`test` 测试、`build` 构建、`ci` CI、`chore` 杂项。
+
+**正文逐文件**：一次提交里，body 每个文件一行自己的 Conventional 注释，格式 `- <type>(<scope>): <简述> · <路径>`：
+
+```
+feat(api): 更新 decideRetry
+
+- feat(api): 更新 decideRetry · src/api/retry.ts
+- docs: 更新文档 guide · docs/guide.md
+- test(api): 新增 retry.test.ts · src/api/retry.test.ts
+```
+
+每条注释只描述那一个文件（类型、scope、符号都取自它自己）。**单文件提交不写正文**；超过 `maxFilesShown`（默认 12）个文件时，其余折叠成一行 `- …另有 N 个文件`。
+需要 `BREAKING CHANGE: ...` 时它属于正文，而你一旦自己写正文，自动注释就不再生效——要么把要保留的注释一并写进去，要么先用 `prepare` 看卡片再决定。
 
 ## 边界
 
@@ -63,4 +76,4 @@ tag 询问也由插件内置完成（选项框直接弹给用户，不消耗 tok
 
 ## 输出
 
-只向用户展示卡片里的关键结果：改动文件数、提交信息、commit 短 hash、tag、推送结果。不展示推理过程。
+只向用户展示卡片里的关键结果：卡片第一行就是结论（`✅ Git 提交并推送成功` / `✅ Git 提交成功（未推送）` / `⚠️ 已提交，但推送失败` / `❌ 提交失败`），然后是提交信息、文件数、逐文件注释、tag、推送结果。不展示推理过程。

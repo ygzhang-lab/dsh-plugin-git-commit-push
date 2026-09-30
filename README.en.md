@@ -134,28 +134,66 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # session cwd is 
 ### What the card looks like
 
 ```
-**git** · `main` · 3 files · +48 / -12
+🔎 **改动预览（未提交）** · `main` · 3 files · +48 / -12
 status: 1 added / 2 modified
-  added    src/foo/bar.ts +40/-0
-  modified src/foo/baz.ts +8/-10
-  deleted  src/old.ts
+  added    src/foo/bar.ts +40/-0 → feat(foo): add bar component
+  modified src/foo/baz.ts +8/-10 → fix(foo): correct parseThing decision
+  deleted  src/old.ts → refactor: remove old
 tag evidence: version 1.2.3 → 1.2.4 (package.json)
 recent style: "feat(ui): add theme switch" "fix(api): correct retry decision"
-draft: `feat(foo): update bar`
+subject: `feat(foo): update bar component`
 (preview only — nothing committed, nothing pushed)
 ```
 
 And after a commit:
 
 ```
-**git commit** · `main` · `a1b2c3d`
-message: feat(foo): add bar component
-3 files committed · +48 / -12
-tag: v1.2.4
-push: pushed (tag included)
+✅ **Git 提交并推送成功** · `main` · `a1b2c3d`
+信息：feat(foo): 更新 bar 组件
+提交 3 个文件 · +48 / -12
+  - feat(foo): 新增 bar 组件 · src/foo/bar.ts
+  - fix(foo): 修正 parseThing 判断 · src/foo/baz.ts
+  - refactor: 移除 old · src/old.ts
+标签：v1.2.4
+推送：已推送（含标签）
 ```
 
-(Card text is localized: `defaultLanguage: "zh"` or `"en"`.)
+Four outcomes are unmistakable, so a card can no longer be mistaken for "nothing happened":
+
+| First line | Meaning |
+|---|---|
+| `✅ **Git 提交并推送成功**` | committed and pushed |
+| `✅ **Git 提交成功（未推送）**` | committed; `autoPush` is off or this call said `--no-push` |
+| `⚠️ **已提交，但推送失败**` | the commit is local, the push failed (reason in `说明：`) |
+| `❌ **提交失败**` | nothing was committed; your changes are untouched in the working tree |
+
+Other states: `ℹ️ **没有需要提交的改动**`, `⚠️ **当前目录不是 Git 仓库**` (with the candidate repositories listed),
+`❌ **未初始化 Git**`, `❌ **找不到 git**`.
+
+### Multiple files: one commit, one note per file
+
+Several files are still **one commit**, but its body carries one typed Conventional note per file instead of a single
+sentence pretending to cover all of them:
+
+```
+feat(api): 更新 decideRetry
+
+- feat(api): 更新 decideRetry · src/api/retry.ts
+- docs: 更新文档 guide · docs/guide.md
+- test(api): 新增 retry.test.ts · src/api/retry.test.ts
+```
+
+- Every note describes **that one file**: the type comes from the file itself (`docs/` → `docs:`, `*.test.ts` →
+  `test:`), the scope is its directory (dropped when it would only repeat the type, so `docs(docs)` never appears),
+  and the summary prefers a symbol the file's own diff declares (`update decideRetry`).
+- Supply only a **subject** (a single-line `message`) and the per-file notes are appended for you; supply your own
+  body (a multi-line `message`) and it is used **verbatim**, with no generated notes added.
+- A **single-file commit has no body** — its subject says it all.
+- The body names at most `maxFilesShown` files (12 by default); the rest collapse into `- …另有 N 个文件`.
+
+(Card text is localized: `defaultLanguage: "zh"` or `"en"` — including the per-file notes. The card *format* is
+Chinese-and-English-mixed by design: the verdict line and labels are Chinese in both locales, the file notes follow
+the message language.)
 
 ## Settings
 
@@ -270,8 +308,8 @@ directory and delete them):
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # pure logic + packaging/config/form/skill contracts (75 checks)
-node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit (20 checks)
+node self-test.mjs              # pure logic + packaging/config/form/skill contracts (86 checks)
+node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit, per-file notes, card verdicts (24 checks)
 node capture-git-format.mjs     # prints raw git -z bytes, for diagnosing framing
 ```
 
@@ -335,8 +373,8 @@ lib/skill.js             parses SKILL.md into the runtime skill definition (fron
 lib/profile-edit.mjs     profile manifest editor shared by both installers (idempotent, keeps unknown fields, no BOM, self-verifying)
 setup.ps1                Windows install / uninstall (path C)
 setup.sh                 macOS / Linux install / uninstall (path C)
-self-test.mjs            pure logic + packaging/config/form contracts (75 checks)
-self-test-git.mjs        real-git integration (20 checks, own temporary repository)
+self-test.mjs            pure logic + packaging/config/form contracts (86 checks)
+self-test-git.mjs        real-git integration (24 checks, own temporary repository)
 capture-git-format.mjs   prints raw git -z bytes (framing diagnostics)
 e2e-check.mjs            calls run() directly, to verify the commit path without restarting DSH
 ```

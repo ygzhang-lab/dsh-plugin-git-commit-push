@@ -131,27 +131,60 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不
 
 ### 卡片长什么样
 
+预览（`prepare` / `/git-commit-push --prepare`）——第一行就是结论，每个文件后面跟着**它自己的拟定注释**：
+
 ```
-**git** · `main` · 3 个文件 · +48 / -12
+🔎 **改动预览（未提交）** · `main` · 3 个文件 · +48 / -12
 状态：新增 1 / 修改 2
-  新增 src/foo/bar.ts +40/-0
-  修改 src/foo/baz.ts +8/-10
-  删除 src/old.ts
+  新增 src/foo/bar.ts +40/-0 → feat(foo): 新增 bar 组件
+  修改 src/foo/baz.ts +8/-10 → fix(foo): 修正 parseThing 判断
+  删除 src/old.ts → refactor: 移除 old
 标签依据：版本号 1.2.3 → 1.2.4（package.json）
 最近提交风格："feat(ui): 新增主题切换" "fix(api): 修正重试判断"
-拟定信息：`feat(foo): 更新 bar`
+拟定标题：`feat(foo): 更新 bar 组件`
 （仅预览，未提交未推送）
 ```
 
 提交后：
 
 ```
-**git commit** · `main` · `a1b2c3d`
-信息：feat(foo): 新增 bar 组件
-提交文件 3 个 · +48 / -12
+✅ **Git 提交并推送成功** · `main` · `a1b2c3d`
+信息：feat(foo): 更新 bar 组件
+提交 3 个文件 · +48 / -12
+  - feat(foo): 新增 bar 组件 · src/foo/bar.ts
+  - fix(foo): 修正 parseThing 判断 · src/foo/baz.ts
+  - refactor: 移除 old · src/old.ts
 标签：v1.2.4
 推送：已推送（含标签）
 ```
+
+四种结果一眼可辨，不会再出现「卡片只有一行、以为没干活」：
+
+| 首行 | 含义 |
+|---|---|
+| `✅ **Git 提交并推送成功**` | 提交也推送了 |
+| `✅ **Git 提交成功（未推送）**` | 提交成功，`autoPush` 关闭或本次 `--no-push` |
+| `⚠️ **已提交，但推送失败**` | 提交在本地，推送失败（`说明：` 里有原因）|
+| `❌ **提交失败**` | 提交没成功，改动原样留在工作区 |
+
+其他状态：`ℹ️ **没有需要提交的改动**`、`⚠️ **当前目录不是 Git 仓库**`（并列出候选仓库）、`❌ **未初始化 Git**`、`❌ **找不到 git**`。
+
+### 多文件：一次提交，每个文件一行自己的注释
+
+多文件时**仍然是一次提交**，但正文里每个文件一行自己的 Conventional 注释，而不是一句笼统的话盖住所有文件：
+
+```
+feat(foo): 更新 bar 组件
+
+- feat(foo): 新增 bar 组件 · src/foo/bar.ts
+- fix(foo): 修正 parseThing 判断 · src/foo/baz.ts
+- refactor: 移除 old · src/old.ts
+```
+
+- 每条注释**只描述那一个文件**：类型取自它自己（`docs/` → `docs:`、`*.test.ts` → `test:`），scope 取它所在的目录（与类型重复时自动省略，不会出现 `docs(docs)`），简述优先用它 diff 里声明的符号（如 `更新 decideRetry`）。
+- 你只给**标题**（单行 `message`）时，插件自动补上这些逐文件注释；你自己写了正文（多行 `message`）则**原样使用**，插件不再添加任何注释。
+- **单文件提交没有正文**——标题已经说完了。
+- 正文最多列 `maxFilesShown` 个文件（默认 12），其余折叠成一行 `- …另有 N 个文件`。
 
 ## 配置
 
@@ -246,8 +279,8 @@ npm 安装时随包装上；而 `link:`（源码 checkout）安装时 pnpm 不�
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # 纯逻辑 + 打包 / 配置 / 表单 / skill 契约（75 项）
-node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交（20 项）
+node self-test.mjs              # 纯逻辑 + 打包 / 配置 / 表单 / skill 契约（86 项）
+node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交、逐文件注释、卡片结论（24 项）
 node capture-git-format.mjs     # 只打印真实 git 的 -z 原始字节，用于诊断分帧问题
 ```
 
@@ -291,8 +324,8 @@ lib/skill.js             从 SKILL.md 解析出运行时 skill 定义（含 fron
 lib/profile-edit.mjs     两个安装脚本共用的 profile 清单编辑器（幂等、保留未知字段、无 BOM、自校验）
 setup.ps1                Windows 安装 / 卸载（方式 C）
 setup.sh                 macOS / Linux 安装 / 卸载（方式 C）
-self-test.mjs            纯逻辑 + 打包 / 配置 / 表单契约自检（75 项）
-self-test-git.mjs        真实 git 集成自检（20 项，自建临时仓库）
+self-test.mjs            纯逻辑 + 打包 / 配置 / 表单契约自检（86 项）
+self-test-git.mjs        真实 git 集成自检（24 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（诊断分帧问题）
 e2e-check.mjs            直连调用 run()，用于不重启验证提交路径
 ```

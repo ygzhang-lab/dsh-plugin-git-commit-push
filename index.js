@@ -185,7 +185,11 @@ async function doCommit(ctx, exec, options) {
   if (settings.autoAdd) {
     // `exec` is present for a tool call and absent for a `/git-commit-push` invocation
     // driven by tests or an embedding host, so the optional chain is required.
-    stageAll(root, exec?.signal)
+    //
+    // AWAITED on purpose: this used to race the staged-numstat read below, so a
+    // real commit reported `+0 / -0` on the card — a wrong number right where a
+    // person looks for confirmation.
+    await stageAll(root, exec?.signal)
   }
 
   const stagedStats = await numstat(root, true)
@@ -334,15 +338,46 @@ function prepareCard(surveyResult, settings) {
   })
 }
 
-/** The compact markdown card for a completed commit. */
-function applyCard(options) {
-  const { branch, hash, subject, tagCreated, pushed, pushedTag, note, fileCount, totals } = options
+/**
+ * The compact markdown card for a completed commit.
+ *
+ * The first line is the VERDICT, not a label. A person who never expands the
+ * card still learns whether the work landed and whether it was pushed — the
+ * earlier `**git commit** · …` header was easy to mistake for a log line and
+ * therefore for "nothing happened".
+ *
+ * Exported because the card contract (which verdict for which outcome) is worth
+ * testing directly: the push-failure branch cannot be produced cheaply against
+ * a real remote.
+ */
+export function applyCard(options) {
+  const {
+    branch, hash, subject, tagCreated, pushed, pushedTag, note, fileCount, totals,
+    notes, autoPush, maxFiles = 12,
+  } = options
   const lines = []
-  lines.push(`**git commit** · \`${branch}\` · \`${hash ?? '?'}\``)
+  const verdict = pushed
+    ? '✅ **Git 提交并推送成功**'
+    : autoPush === true
+      ? '⚠️ **已提交，但推送失败**'
+      : '✅ **Git 提交成功（未推送）**'
+  lines.push(`${verdict} · \`${branch}\` · \`${hash ?? '?'}\``)
   lines.push(`信息：${subject}`)
-  if (fileCount !== undefined) lines.push(`提交文件 ${fileCount} 个 · +${totals?.added ?? 0} / -${totals?.deleted ?? 0}`)
+  if (fileCount !== undefined) lines.push(`提交 ${fileCount} 个文件 · +${totals?.added ?? 0} / -${totals?.deleted ?? 0}`)
+
+  // The per-file notes the commit body carries, so the card shows exactly what
+  // went into the repository. One file needs no list: the subject is the note.
+  const listed = (notes ?? []).slice(0, maxFiles)
+  if (listed.length > 1) {
+    for (const item of listed) lines.push(`  - ${item.note} · ${item.path}`)
+    const hidden = notes.length - listed.length
+    if (hidden > 0) lines.push(`  - …另有 ${hidden} 个文件`)
+  }
+
   lines.push(`标签：${tagCreated ?? '无'}`)
-  lines.push(pushed ? `推送：已推送${pushedTag ? '（含标签）' : ''}` : '推送：未推送')
+  lines.push(pushed
+    ? `推送：已推送${pushedTag ? '（含标签）' : ''}`
+    : autoPush === true ? '推送：失败（见下方说明）' : '推送：未推送')
   if (note !== undefined) lines.push(`说明：${note}`)
   return lines.join('\n')
 }
@@ -404,9 +439,9 @@ async function runWithSettings(ctx, request, exec, settings) {
     if (current.notRepo === true) {
       const candidates = current.candidates ?? []
       const card = candidates.length === 0
-        ? '该项目未初始化 Git，跳过提交。'
+        ? '❌ **未初始化 Git**（该项目不是 Git 仓库，未做任何提交）'
         : [
-          '当前位置不是 Git 仓库；其下有这些仓库，请用 cwd 参数指定：',
+          '⚠️ **当前目录不是 Git 仓库**；其下有这些仓库，请用 cwd 参数指定：',
           ...candidates.map(root => `  - ${root}`),
         ].join('\n')
       return valueOf({
@@ -420,7 +455,9 @@ async function runWithSettings(ctx, request, exec, settings) {
     return valueOf({
       ok: false,
       action: request.action,
-      card: current.message ?? '无法读取仓库状态',
+      card: current.reason === 'clean'
+        ? 'ℹ️ **没有需要提交的改动**（工作区是干净的）'
+        : `⚠️ **无法读取仓库状态**：${current.message ?? '未知原因'}`,
       error: current.reason ?? 'survey-failed',
     })
   }
@@ -438,9 +475,21 @@ async function runWithSettings(ctx, request, exec, settings) {
     })
   }
 
-  const message = request.message !== undefined && request.message !== ''
-    ? request.message
-    : current.draft.message
+  // Who writes the body? A caller-supplied message is honored, but when it is a
+  // bare subject (no body of its own) the per-file notes are appended rather
+  // than replaced: "one message for every file" is exactly what the body is
+  // there to avoid, and the caller usually only has an opinion about the sum.
+  const supplied = request.message !== undefined && request.message !== ''
+  const generated = current.draft.message
+  let message = supplied ? request.message : generated
+  let commitNotes = supplied ? undefined : current.draft.notes
+  if (supplied && !request.message.includes('\n') && current.entries.length > 1) {
+    const body = generated.split('\n').slice(1).join('\n').replace(/^\n+/u, '')
+    if (body !== '') {
+      message = `${request.message}\n\n${body}`
+      commitNotes = current.draft.notes
+    }
+  }
 
   let committed
   try {
@@ -461,7 +510,7 @@ async function runWithSettings(ctx, request, exec, settings) {
     return valueOf({
       ok: false,
       action: request.action,
-      card: `提交失败：${committed.error ?? '未知原因'}`,
+      card: `❌ **提交失败**（改动仍留在工作区，未推送）\n原因：${committed.error ?? '未知原因'}`,
       root: current.root,
       branch: current.branch,
       error: 'commit-failed',
@@ -514,6 +563,9 @@ async function runWithSettings(ctx, request, exec, settings) {
       note: notes.length > 0 ? notes.join('；') : undefined,
       fileCount: committed.files,
       totals: { added: committed.added ?? 0, deleted: committed.deleted ?? 0 },
+      notes: commitNotes,
+      autoPush: effective.autoPush,
+      maxFiles: effective.maxFilesShown,
     }),
     root: current.root,
     branch: current.branch,
@@ -562,10 +614,13 @@ const TOOL_DEFINITION = {
     + 'NEVER call it on your own initiative: not because you or the user just finished editing files, not because a '
     + 'task looks complete, not because the session is ending, and not as a tidy-up step. Editing files is not a '
     + 'request to commit them. If it is unclear whether the user wants a commit, ask first. '
-    + 'action="prepare" returns a compact report of the pending changes — file list with per-file line counts, '
-    + 'status counts, the inferred Conventional-Commits type and scope, recent commit subjects for tone, and a '
+    + 'action="prepare" returns a compact report of the pending changes — verdict line, file list with per-file line '
+    + 'counts, each file\'s own Conventional-Commits note, status counts, recent commit subjects for tone, and a '
     + 'rule-generated draft message — WITHOUT spending tokens on the diff itself. Read it, write your own '
-    + 'Conventional-Commits message, then call action="apply" with that message. '
+    + 'Conventional-Commits subject, then call action="apply" with that subject as `message`. '
+    + 'MULTI-FILE COMMITS GET ONE NOTE PER FILE: when several files changed, the commit body lists each file with its '
+    + 'own typed note (`- fix(api): correct retry decision · src/api/retry.ts`), and the notes are generated per file '
+    + 'even when you supply only a subject — supplying a message with a body of your own replaces them entirely. '
     + 'action="auto" commits immediately using the rule-generated message (no extra model turn; use it when the user '
     + 'asked you to just commit). '
     + 'The plugin stages the working tree, commits, asks the user about a tag when a version bump, a possible '
@@ -586,7 +641,8 @@ const TOOL_DEFINITION = {
       message: {
         type: 'string',
         description: 'The commit message, in Conventional Commits form. Implies action="apply" when action is omitted. '
-          + 'First line is the subject; later lines become the commit body.',
+          + 'The first line is the subject; later lines become the body and REPLACE the per-file notes the plugin would '
+          + 'generate. Supply only a subject and the per-file notes are still appended for you.',
       },
       tag: {
         type: 'string',

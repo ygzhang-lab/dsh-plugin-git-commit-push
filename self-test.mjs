@@ -31,7 +31,7 @@ import { normalizeEntries } from './lib/survey.js'
 import { loadSettingsReport, DEFAULTS, FIELDS as CONFIG_FIELDS, IDENTITY_FIELDS, resolveSettings, uiOverrides } from './lib/config.js'
 import { buildConfigSchema, loadSchemaLibrary, schemaBuildProblem, CONFIG } from './lib/schema.js'
 import { parseSkillFile, skillDefinition, SKILL_NAME, SKILL_PATH } from './lib/skill.js'
-import { apply, inject, COMMAND_NAME, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
+import { apply, applyCard, inject, COMMAND_NAME, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
 
 let passed = 0
 const failures = []
@@ -169,28 +169,90 @@ check('english mode produces an english subject', () => {
 })
 
 check('english mode localizes the body too, not just the subject', () => {
-  // A commit whose subject is English and whose bullets are Chinese reads like
-  // an accident; the language setting covers the whole message.
-  const built = buildMessage({
-    entries: [
-      { status: 'M', path: 'src/a.ts' },
-      { status: 'M', path: 'src/b.ts' },
-    ],
-    stats: statMap({ 'src/a.ts': { added: 2, deleted: 1, binary: false }, 'src/b.ts': { added: 1, deleted: 1, binary: false } }),
-    unifiedDiff: '+export function thing() {}\n',
-    language: 'en',
-  })
-  assert.equal(/[\u4e00-\u9fa5]/u.test(built.message), false, built.message)
-  assert.match(built.message, /- 3 files changed \(\+3 \/ -2\)|files changed/)
-  assert.match(built.message, /- Touches: thing/)
+  // A commit whose subject is English and whose notes are Chinese reads like an
+  // accident; the language setting covers the whole message.
+  const entries = [{ status: 'M', path: 'src/a.ts' }, { status: 'M', path: 'src/b.ts' }]
+  const stats = statMap({ 'src/a.ts': { added: 2, deleted: 1, binary: false }, 'src/b.ts': { added: 1, deleted: 1, binary: false } })
+  const english = buildMessage({ entries, stats, unifiedDiff: '+export function thing() {}\n', language: 'en' })
+  assert.equal(/[\u4e00-\u9fa5]/u.test(english.message), false, english.message)
+  assert.match(english.message, /- [^\n]*· src\/a\.ts/)
+  assert.match(english.message, /- [^\n]*· src\/b\.ts/)
 
-  const chinese = buildMessage({
-    entries: [{ status: 'M', path: 'src/a.ts' }, { status: 'M', path: 'src/b.ts' }],
-    stats: statMap({ 'src/a.ts': { added: 2, deleted: 1, binary: false }, 'src/b.ts': { added: 1, deleted: 1, binary: false } }),
-    unifiedDiff: '+export function thing() {}\n',
+  const chinese = buildMessage({ entries, stats, unifiedDiff: '+export function thing() {}\n' })
+  const bodyLines = chinese.message.split('\n').filter(line => line.startsWith('- '))
+  assert.equal(bodyLines.length, 2)
+  for (const line of bodyLines) assert.match(line, /[\u4e00-\u9fa5]/u, line)
+})
+
+console.log('\none Conventional-Commits note per file')
+
+const noteStats = statMap({
+  'src/api/retry.ts': { added: 8, deleted: 3, binary: false },
+  'docs/guide.md': { added: 4, deleted: 0, binary: false },
+  'src/api/retry.test.ts': { added: 12, deleted: 1, binary: false },
+})
+const noteEntries = [
+  { status: 'M', path: 'src/api/retry.ts' },
+  { status: 'M', path: 'docs/guide.md' },
+  { status: 'A', path: 'src/api/retry.test.ts' },
+]
+const noteDiff = [
+  'diff --git a/src/api/retry.ts b/src/api/retry.ts',
+  '@@ -1 +1 @@',
+  '-function decideRetry(n) { return n < 3 }',
+  '+export function decideRetry(n) { return n < 5 }',
+  'diff --git a/docs/guide.md b/docs/guide.md',
+  '@@ -1 +1 @@',
+  '+Retries now give up after five attempts.',
+].join('\n')
+
+check('every file in the body gets its own typed note', () => {
+  const { message, notes } = buildMessage({ entries: noteEntries, stats: noteStats, unifiedDiff: noteDiff })
+  // Each note is derived from THAT file: the API file is a feat named after the
+  // symbol its diff declares, the markdown file is docs, the new test file is
+  // a test. One shared sentence could not say all three.
+  assert.deepEqual(notes.map(item => item.path), noteEntries.map(entry => entry.path))
+  assert.match(message, /- feat\(api\): 更新 decideRetry · src\/api\/retry\.ts/)
+  assert.match(message, /- docs: 更新文档 guide · docs\/guide\.md/)
+  assert.match(message, /- test\(api\): 新增 retry\.test\.ts · src\/api\/retry\.test\.ts/)
+})
+
+check('the body follows the subject after a blank line', () => {
+  const { message } = buildMessage({ entries: noteEntries, stats: noteStats, unifiedDiff: noteDiff })
+  const [subject, blank, first] = message.split('\n')
+  assert.match(subject, /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\(|:)/)
+  assert.equal(blank, '', 'a body must be separated from the subject by a blank line')
+  assert.match(first, /^- /)
+})
+
+check('a single file keeps the subject only, with no body at all', () => {
+  const { message, notes } = buildMessage({
+    entries: [noteEntries[0]],
+    stats: noteStats,
+    unifiedDiff: noteDiff,
   })
-  assert.match(chinese.message, /变更文件 2 个/)
-  assert.match(chinese.message, /涉及：thing/)
+  assert.equal(message.includes('\n'), false)
+  assert.deepEqual(notes, [], 'a one-file commit has nothing to itemize')
+})
+
+check('a scope that only repeats the type is dropped', () => {
+  // `docs(docs): 更新文档 docs` is what the naive composition produces, and it
+  // reads like a bug.
+  const { message } = buildMessage({ entries: [noteEntries[1]], stats: noteStats, unifiedDiff: noteDiff })
+  assert.match(message, /^docs: /)
+  assert.equal(message.includes('docs(docs)'), false)
+})
+
+check('the body is capped, with an explicit remainder line', () => {
+  const { message, notes } = buildMessage({
+    entries: noteEntries,
+    stats: noteStats,
+    unifiedDiff: noteDiff,
+    maxFiles: 2,
+  })
+  assert.equal(notes.length, 2)
+  assert.match(message, /- …另有 1 个文件/)
+  assert.equal(message.includes('retry.test.ts'), false, 'the capped file must not leak into the body')
 })
 
 check('declaredSymbols ignores diff headers and comments', () => {
@@ -210,6 +272,25 @@ check('totalsOf sums both sides', () => {
 })
 
 console.log('\ncard rendering')
+
+check('the preview card leads with an unmissable verdict', () => {
+  const card = renderCard({
+    branch: 'main',
+    entries: noteEntries,
+    stats: noteStats,
+    recentSubjects: [],
+    version: undefined,
+    breaking: false,
+    draft: buildMessage({ entries: noteEntries, stats: noteStats, unifiedDiff: noteDiff }),
+    maxFiles: 12,
+    hasUpstream: true,
+  })
+  assert.match(card.split('\n')[0], /^🔎 \*\*改动预览（未提交）\*\*/)
+  // Each file line ends in the note that file would get in the commit body.
+  assert.match(card, /src\/api\/retry\.ts.*→ feat\(api\): 更新 decideRetry/)
+  assert.match(card, /docs\/guide\.md.*→ docs: 更新文档 guide/)
+  assert.match(card, /拟定标题：/)
+})
 
 check('card renders without a diff or a version', () => {
   const card = renderCard({
@@ -242,6 +323,58 @@ check('card reports tag evidence and deletion count', () => {
   assert.match(card, /1\.0\.0 → 1\.1\.0/)
   assert.match(card, /破坏性变更/)
   assert.match(card, /无 upstream/)
+})
+
+console.log('\nthe commit card states the outcome')
+
+const commitCard = (extra) => applyCard({
+  branch: 'main',
+  hash: 'a1b2c3d',
+  subject: 'feat(api): 更新 retry',
+  tagCreated: undefined,
+  pushed: false,
+  pushedTag: undefined,
+  note: undefined,
+  fileCount: 2,
+  totals: { added: 12, deleted: 4 },
+  notes: [
+    { path: 'src/api/retry.ts', note: 'feat(api): 更新 decideRetry' },
+    { path: 'docs/guide.md', note: 'docs: 更新文档 guide' },
+  ],
+  autoPush: false,
+  maxFiles: 12,
+  ...extra,
+})
+
+check('a pushed commit says so in the first line', () => {
+  const card = commitCard({ pushed: true, autoPush: true })
+  assert.match(card.split('\n')[0], /^✅ \*\*Git 提交并推送成功\*\*/)
+  assert.match(card, /推送：已推送/)
+})
+
+check('a commit that was not pushed says so without looking like a failure', () => {
+  const card = commitCard({ pushed: false, autoPush: false })
+  assert.match(card.split('\n')[0], /^✅ \*\*Git 提交成功（未推送）\*\*/)
+  assert.match(card, /推送：未推送/)
+})
+
+check('a failed push is a warning, not a silent success', () => {
+  const card = commitCard({ pushed: false, autoPush: true, note: '推送失败（rejected）' })
+  assert.match(card.split('\n')[0], /^⚠️ \*\*已提交，但推送失败\*\*/)
+  assert.match(card, /推送：失败/)
+  assert.match(card, /说明：推送失败/)
+})
+
+check('the commit card lists the per-file notes it wrote', () => {
+  const card = commitCard({ pushed: true, autoPush: true })
+  assert.match(card, /- feat\(api\): 更新 decideRetry · src\/api\/retry\.ts/)
+  assert.match(card, /- docs: 更新文档 guide · docs\/guide\.md/)
+  assert.match(card, /提交 2 个文件 · \+12 \/ -4/)
+})
+
+check('a one-file commit card has no redundant note list', () => {
+  const card = commitCard({ notes: [{ path: 'src/api/retry.ts', note: 'feat(api): 更新 decideRetry' }], fileCount: 1 })
+  assert.equal(card.includes('  - '), false)
 })
 
 console.log('\nargument parsing (/git-commit-push)')

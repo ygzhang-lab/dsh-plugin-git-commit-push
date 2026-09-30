@@ -347,6 +347,94 @@ await check('run(auto) uses the rule-generated message', async () => {
   }
 })
 
+await check('the commit card reports the real line counts', async () => {
+  // The staged numstat used to race `git add`, so a commit that changed lines
+  // reported `+0 / -0` — a wrong number exactly where a person looks for
+  // confirmation that their work landed.
+  const repo = createFixtureRepo('git-commit-totals-')
+  try {
+    repo.write('src/a.js', 'export const a = 1\n')
+    repo.git(['add', '-A'])
+    repo.git(['-c', 'user.email=t@example.com', '-c', 'user.name=T', 'commit', '-qm', 'init'])
+    repo.write('src/a.js', 'export const a = 1\nexport const b = 2\nexport const c = 3\n')
+
+    const result = await run({ get: () => undefined }, { action: 'apply', message: 'feat(a): 加两个常量', push: false, cwd: repo.dir }, undefined)
+    assert.equal(result.ok, true, `apply failed: ${result.card}`)
+    assert.match(String(result.card), /提交 1 个文件 · \+2 \/ -0/, String(result.card))
+    assert.match(String(result.card), /^✅ \*\*Git 提交成功（未推送）\*\*/)
+  } finally {
+    repo.cleanup()
+  }
+})
+
+await check('a multi-file commit lands as ONE commit with one note per file', async () => {
+  const repo = createFixtureRepo('git-commit-notes-')
+  try {
+    repo.write('src/api/retry.js', 'export function decideRetry(n) { return n < 3 }\n')
+    repo.write('docs/guide.md', '# guide\n')
+    repo.git(['add', '-A'])
+    repo.git(['-c', 'user.email=t@example.com', '-c', 'user.name=T', 'commit', '-qm', 'init'])
+    // One modified file that declares something, one new documentation file.
+    repo.write('src/api/retry.js', 'export function decideRetry(n) { return n < 5 }\n')
+    repo.write('docs/retry.md', '# retry\n')
+    const before = Number(repo.git(['rev-list', '--count', 'HEAD']).trim())
+
+    const result = await run({ get: () => undefined }, { action: 'auto', push: false, cwd: repo.dir }, undefined)
+    assert.equal(result.ok, true, `auto failed: ${result.card}`)
+
+    const after = Number(repo.git(['rev-list', '--count', 'HEAD']).trim())
+    assert.equal(after, before + 1, 'the notes must not become separate commits')
+    const body = repo.git(['log', '-1', '--pretty=format:%B'])
+    const lines = body.split('\n')
+    assert.match(lines[0], /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)/, body)
+    assert.equal(lines[1], '', 'subject and body are separated by a blank line')
+    assert.match(body, /- [^\n]*decideRetry[^\n]* · src\/api\/retry\.js/, body)
+    assert.match(body, /- [^\n]* · docs\/retry\.md/, body)
+    assert.equal(lines.filter(line => line.startsWith('- ')).length, 2, body)
+  } finally {
+    repo.cleanup()
+  }
+})
+
+await check('a caller subject keeps its own body when it wrote one', async () => {
+  const repo = createFixtureRepo('git-commit-verbatim-')
+  try {
+    repo.write('src/a.js', 'export const a = 1\n')
+    repo.write('src/b.js', 'export const b = 1\n')
+    const result = await run(
+      { get: () => undefined },
+      { action: 'apply', message: 'feat(a): 两个文件一起改\n\nBREAKING CHANGE: 接口改了', push: false, cwd: repo.dir },
+      undefined,
+    )
+    assert.equal(result.ok, true, `apply failed: ${result.card}`)
+    const body = repo.git(['log', '-1', '--pretty=format:%B'])
+    assert.match(body, /^feat\(a\): 两个文件一起改\n\nBREAKING CHANGE: 接口改了\n?$/, body)
+    assert.equal(body.includes(' · src/'), false, 'an explicit body must not be decorated with generated notes')
+  } finally {
+    repo.cleanup()
+  }
+})
+
+await check('a caller subject with no body gets the per-file notes appended', async () => {
+  const repo = createFixtureRepo('git-commit-subject-only-')
+  try {
+    repo.write('src/a.js', 'export const a = 1\n')
+    repo.write('src/b.js', 'export const b = 1\n')
+    const result = await run(
+      { get: () => undefined },
+      { action: 'apply', message: 'feat(a): 两个文件', push: false, cwd: repo.dir },
+      undefined,
+    )
+    assert.equal(result.ok, true, `apply failed: ${result.card}`)
+    const body = repo.git(['log', '-1', '--pretty=format:%B'])
+    assert.match(body, /^feat\(a\): 两个文件\n\n- /, body)
+    assert.match(body, /· src\/a\.js/)
+    assert.match(body, /· src\/b\.js/)
+  } finally {
+    repo.cleanup()
+  }
+})
+
 console.log(`\n${passed} passed, ${failures.length} failed\n`)
 if (failures.length > 0) {
   for (const failure of failures) console.log(`FAILED: ${failure.label}\n${failure.error.stack}\n`)
