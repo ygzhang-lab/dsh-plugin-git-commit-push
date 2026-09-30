@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Git commit & push",
-    "description": "One call commits and pushes: surveys the working tree, writes a Conventional Commits message, asks about a tag when one is warranted, then pushes. Also ships a /commit-push command that runs without the model."
+    "description": "One call commits and pushes: surveys the working tree, writes a Conventional Commits message, asks about a tag when one is warranted, then pushes. Also ships a /git-commit-push command that runs without the model."
   }
 }

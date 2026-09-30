@@ -19,7 +19,7 @@ Installing gives you three surfaces:
 | Surface | Name | Used by |
 |---|---|---|
 | Tool | `git_commit_push` (`prepare` / `apply` / `auto`) | the model |
-| Slash command | `/commit-push` | you, **with no model round-trip at all** |
+| Slash command | `/git-commit-push` | you, **with no model round-trip at all** |
 | Skill | `git-commit-push` | the model, loading the full procedure on demand |
 
 - Platforms: **Windows and macOS / Linux** (see "Platforms")
@@ -79,15 +79,16 @@ Loader `insert` is append-only and the same id mounted twice would register the 
 
 Once DSH is restarted:
 
-- the model can call `git_commit_push`, and you can type `/commit-push`;
+- the model can call `git_commit_push`, and you can type `/git-commit-push`;
 - Settings → Plugins lists this package (title "Git 提交与推送", with an icon) and can enable/disable/uninstall it;
-- the model's skill catalog contains `git-commit-push`.
+- the model's skill catalog contains `git-commit-push`;
+- Settings shows this plugin's **configuration form** (11 fields, applied live with no restart).
 
 ## Trigger policy (read this first)
 
 **Only two situations may use it; it never fires on its own:**
 
-1. **the user typed the `/commit-push` slash command** — the command runs it, no model involved;
+1. **the user typed the `/git-commit-push` slash command** — the command runs it, no model involved;
 2. **the user explicitly asked** to commit and/or push ("commit", "push", "提交", "推送").
 
 **Finishing an edit, completing a task, an almost-over session, or a user saying "save it" are NOT
@@ -104,7 +105,7 @@ has already been made.
 
 | Path | Model tokens | Why |
 |---|---|---|
-| **1. `/commit-push` slash command** | **0 (really)** | No model request is made at all. Command discovery, execution and UI output cost no model tokens, and the result is rendered in the UI only — it never enters the transcript. This is the **only** truly 0-token path. |
+| **1. `/git-commit-push` slash command** | **0 (really)** | No model request is made at all. Command discovery, execution and UI output cost no model tokens, and the result is rendered in the UI only — it never enters the transcript. This is the **only** truly 0-token path. |
 | **2. `git_commit_push(auto)` tool call** | a few | The model has to emit the call (arguments + thinking). The plugin writes the message itself, so there is **no** second round-trip; the card is ~200 tokens. One round trip. |
 | **3. `prepare` + `apply` (default)** | ~2 round trips | Only the `prepare` card (~200 tokens) and the `apply` `message` argument enter the context — **no diff is read**. |
 
@@ -114,7 +115,7 @@ pays for each call. What the plugin saves is **comparative**: reading raw git ou
 
 One **fixed cost** must also be stated: while the plugin is installed and the tool is visible to the model,
 its schema (a ~1.5 KB description plus parameters) enters **every** request — roughly **600 tokens**, paid
-even when you never commit. If you only want `/commit-push` and never let the model call the tool, moving
+even when you never commit. If you only want `/git-commit-push` and never let the model call the tool, moving
 the tool out of the model-visible surface (or `deferLoading` it) removes that cost.
 
 ## Usage
@@ -127,8 +128,8 @@ git_commit_push({ action: "apply", message: "…", tag: "v1.2.3" })
 git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # session cwd is not the repository
 ```
 
-`/commit-push` variants (**0 tokens, no model involved**):
-`/commit-push`, `/commit-push --prepare`, `/commit-push --no-push`, `/commit-push --en`, `/commit-push --tag=v1.2.3`, `/commit-push fix login timeout`.
+`/git-commit-push` variants (**0 tokens, no model involved**):
+`/git-commit-push`, `/git-commit-push --prepare`, `/git-commit-push --no-push`, `/git-commit-push --en`, `/git-commit-push --tag=v1.2.3`, `/git-commit-push fix login timeout`.
 
 ### What the card looks like
 
@@ -158,31 +159,48 @@ push: pushed (tag included)
 
 ## Settings
 
-**The right place to change settings** is a user-owned file in the DSH home — an npm install keeps the
-package itself inside `node_modules`, where an edit is lost at the next install or update:
+**Prefer DSH's own settings form.** The plugin exports a Cordis `Config` schema, so its row accepts a `config`
+mapping: DSH's settings service derives a namespace from it, the Settings page renders the fields, and
+`@deepseek-ai/dsh-config-editor` writes the choice into the active profile's `cordis.patch.yml` — on the very
+row this bundle inserts — applying it through the Loader. Every field is declared **volatile**, so a change
+does not remount the plugin and needs no DSH restart: it takes effect on the next tool call.
 
-```
-<DSH_HOME>/git-commit-push.config.json          # default ~/.dsh/git-commit-push.config.json
-```
+**Three sources, highest first:**
 
-Precedence: **user file > shipped template (`git-commit-push.config.json`) > built-in defaults**.
-A missing file is not an error (the defaults are the documented behaviour). A file that exists but is not
-valid JSON is **reported** — the result card gains a "配置未生效: …" line rather than silently doing
-nothing. Changes apply to the next tool call; no DSH restart. Omitted keys keep their defaults.
-
-| Key | Default | Meaning |
+| Layer | Location | Written by |
 |---|---|---|
-| `autoPush` | `true` | push after a successful commit |
-| `autoAdd` | `true` | `git add -A` before committing |
-| `tagOnVersionChange` | `true` | ask about a tag when a version file changed |
-| `tagOnBreaking` | `true` | ask when a public declaration was removed |
-| `tagOnFileCount` | `10` | ask when ≥ N files changed (`0` disables) |
-| `tagPrefix` | `"v"` | suggested tag prefix |
-| `askBeforeTag` | `true` | `false` tags silently (the only "no question" switch) |
-| `askTimeoutMs` | `120000` | how long the tag question waits |
-| `defaultLanguage` | `"zh"` | language of the generated message (`zh`/`en`) |
-| `maxFilesShown` | `12` | how many paths the card lists |
-| `pinnedIdentity.name/email` | empty | applied per commit with `-c user.name/-c user.email`; your git config is never written |
+| 1 | the row's `config` (the profile's `cordis.patch.yml`) | DSH's settings form |
+| 2 | `<DSH_HOME>/git-commit-push.config.json` (default `~/.dsh/git-commit-push.config.json`) | you, by hand; the fallback for `link:`/offline installs |
+| 3 | the shipped template `git-commit-push.config.json` | the package |
+| — | built-in defaults | whatever none of the above sets |
+
+A missing file is not an error. A file that exists but is not valid JSON is **reported** — the result card
+gains a "配置未生效: …" line rather than silently doing nothing. Omitted keys keep their defaults.
+
+| Key | Default | Meaning | In the form |
+|---|---|---|---|
+| `autoPush` | `true` | push after a successful commit | ✅ |
+| `autoAdd` | `true` | `git add -A` before committing | ✅ |
+| `tagOnVersionChange` | `true` | ask about a tag when a version file changed | ✅ |
+| `tagOnBreaking` | `true` | ask when a public declaration was removed | ✅ |
+| `tagOnFileCount` | `10` | ask when ≥ N files changed (`0` disables) | ✅ |
+| `tagPrefix` | `"v"` | suggested tag prefix | ✅ |
+| `askBeforeTag` | `true` | `false` tags silently (the only "no question" switch) | ✅ |
+| `askTimeoutMs` | `120000` | how long the tag question waits | ✅ |
+| `defaultLanguage` | `"zh"` | language of the generated message (`zh`/`en`) | ✅ |
+| `maxFilesShown` | `12` | how many paths the card lists | ✅ |
+| `pinnedIdentity.name/email` | empty | applied per commit with `-c user.name/-c user.email`; your git config is never written | ✅ |
+
+> Where exactly the form lives depends on your DSH version (the plugins/config entry in Settings). The
+> **Settings → Plugins → Plugin list** tab is explicitly **read-only** (it lets users inspect plugins
+> *without changing their configuration*); the editable form comes from the settings service. Field
+> descriptions are Chinese, matching the default message language — DSH has no per-field localization yet.
+
+**Why a JSON file still exists**: the `Config` schema needs `@deepseek-ai/schemastery`, declared here as an
+ordinary **dependency** so an npm install brings it along. With a `link:` (source checkout) install pnpm does
+not install a link target's dependencies and the host's module resolution may not reach it either. In that
+case the plugin **still works** — it just has no form (`Config === undefined`), and the JSON file is the only
+way in. That is why the file stays, and why it outranks the shipped template.
 
 Environment: `DSH_HOME` is the DSH home (default `~/.dsh`, Windows `%USERPROFILE%\.dsh`); it also decides
 where the user settings file lives.
@@ -196,7 +214,7 @@ package share one name instead of two.
 
 - To **override** it, keep a project-level skill of the same name (`.agents/skills/git-commit-push/SKILL.md`).
   The registry ranks **project > runtime registration**, so your copy wins.
-- A host without a skill registry still works: the skill and the `/commit-push` command are **optional
+- A host without a skill registry still works: the skill and the `/git-commit-push` command are **optional
   capabilities** (awaited through a scoped `ctx.inject`), and losing either never affects the
   `git_commit_push` tool.
 - **Coming from an early revision**: if you manually installed the old SKILL.md into
@@ -252,7 +270,7 @@ directory and delete them):
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # pure logic + packaging/config/skill contracts (64 checks)
+node self-test.mjs              # pure logic + packaging/config/form/skill contracts (75 checks)
 node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit (20 checks)
 node capture-git-format.mjs     # prints raw git -z bytes, for diagnosing framing
 ```
@@ -270,7 +288,7 @@ agreeing with itself.
 
 That test has a history worth keeping: the first `lib/survey.js` imported a function from a module that did
 not export it. The ESM link error made the whole plugin graph unevaluable, so neither `git_commit_push` nor
-`/commit-push` registered — and the pure-logic test never touched `survey.js`. Both test files now import
+`/git-commit-push` registered — and the pure-logic test never touched `survey.js`. Both test files now import
 the complete module graph explicitly, and `apply()` validates the schema with `toolDefinitionProblems()`
 before registering.
 
@@ -285,6 +303,12 @@ The last two sections of `self-test.mjs` check **packaging and runtime contracts
   ≤256 KiB);
 - every DSH peer is `optional` (otherwise pnpm tries to install a host package into the user's profile),
   plus `dsh.manifestVersion` and `engines.dsh`;
+- **the settings layers and the field table agree**: the field table, the built-in defaults and the shipped
+  template cannot drift, the UI layer (row config) beats the JSON file, `pinnedIdentity` merges per key, and
+  only a parsed value that differs from the default counts as "the user set it";
+- **the form is either published or degraded**: when `@deepseek-ai/schemastery` resolves, `Config` must be
+  built with every field volatile; when it does not, `Config` must be `undefined` and the tool must still
+  register;
 - settings precedence (user file > shipped template) and the rule that **a malformed config must be
   reported**;
 - the skill definition parsed from SKILL.md satisfies the registry's `validateRuntimeSkill` rules, and
@@ -297,7 +321,7 @@ line it cannot read fails the test instead of being ignored.
 ## Layout
 
 ```
-index.js                 plugin entry: tool definition, /commit-push command, skill registration, orchestration
+index.js                 plugin entry: tool definition, /git-commit-push command, skill registration, orchestration
 cordis.patch.yml         the bundle patch: the single mount row (dsh.bundle.patch points at it)
 icon.svg                 Plugins page icon (package.json "icon")
 locale/en.json           Plugins page display text (meta.title / meta.description, English)
@@ -305,21 +329,27 @@ locale/zh.json           same, Chinese
 lib/git.js               the only git layer: fixed argv, timeouts, output caps, porcelain parsing, platform probing
 lib/analyze.js           change classification + rule-based Conventional Commits + card rendering
 lib/survey.js            one repository survey: status / numstat / log / bounded diff
-lib/config.js            settings: user file > shipped template > defaults, and reporting a broken file
+lib/config.js            settings + the field table: row config > user file > template > defaults, and reporting a broken file
+lib/schema.js            the Cordis Config (schemastery): the visual form + volatile fields, degrading gracefully when the library is unreachable
 lib/skill.js             parses SKILL.md into the runtime skill definition (frontmatter included)
 lib/profile-edit.mjs     profile manifest editor shared by both installers (idempotent, keeps unknown fields, no BOM, self-verifying)
 setup.ps1                Windows install / uninstall (path C)
 setup.sh                 macOS / Linux install / uninstall (path C)
-self-test.mjs            pure logic + packaging contracts (64 checks)
+self-test.mjs            pure logic + packaging/config/form contracts (75 checks)
 self-test-git.mjs        real-git integration (20 checks, own temporary repository)
 capture-git-format.mjs   prints raw git -z bytes (framing diagnostics)
 e2e-check.mjs            calls run() directly, to verify the commit path without restarting DSH
 ```
 
-Design trade-offs. The tool definition is a **hand-written object** instead of `defineTool(...)`, and the
-settings are a **JSON file** instead of a Cordis `Config` schema, because this package **deliberately
-imports nothing from `@deepseek-ai/*`**: it may be `link:`ed from outside a profile or sit inside
-`node_modules`, and mounting must not fail because the host's module resolution does not reach it.
+Design trade-offs. The tool definition is a **hand-written object** instead of `defineTool(...)`; the only
+host import in the runtime is a deliberate exception — `lib/schema.js` uses `createRequire` to obtain
+`@deepseek-ai/schemastery` so the plugin can declare a `Config`, and the whole thing is wrapped in a
+`try/catch`: when it cannot be reached, `Config === undefined` (no form) and the plugin and its tool keep
+working. Every other module still imports only Node built-ins and relative paths, because this package may be
+`link:`ed from outside a profile or sit inside `node_modules`, and mounting must not fail because the host's
+module resolution does not reach it. (`@deepseek-ai/schemastery` is an ordinary `dependencies` entry, so an
+npm install brings it; a `link:` install does not install a link target's dependencies, which makes that
+degradation path real rather than theoretical.)
 
 The price is writing a **real JSON Schema by hand**: `parameters` needs `type: "object"` + `properties` +
 `required: []`, and `output.schema`'s `required` must be an **array of strings** — `defineTool`'s
@@ -365,6 +395,18 @@ Everything below was verified against the implementation inside the shipped `dsh
    `/^[a-z0-9]+(?:-[a-z0-9]+)*$/`, `description` and `content` must be non-empty strings (re-validated on
    load by `validateDefinition`), the registry fills in the `runtime` provider, and precedence is
    **project > runtime > user**.
+7. **Visual configuration means exporting a `Config` schema** (schemastery, zod-style). DSH's settings
+   service (`@deepseek-ai/dsh-settings` + `@deepseek-ai/dsh-config-editor`) derives a namespace and a form for
+   entries that declare one (`SettingsNamespaceView.autoGenerate`), and writes land in that entry's `config`
+   in the profile patch; a plugin can opt out with `settings.configure({ auto: false })`. A field marked
+   `.volatile()` only commits new values and announces `loader/volatile-update` (the Loader compares with
+   `equalExceptVolatile`) — **no remount** — while an ordinary field change remounts the row. Volatile
+   placement is strict: a fixed object path, never a dict value, array item, map key or union/lazy branch
+   (`validateVolatileSchema` throws otherwise).
+8. **The settings page is not a general plugin settings UI**: `@deepseek-ai/dsh-settings` shows only volatile
+   fields of active, uniquely addressable entries, the **Plugin list** tab is read-only, and the
+   `pluginManager/*` RPCs only install/enable/disable/uninstall — so the one requirement for "visually
+   configurable" is that the plugin declares `Config` itself.
 
 Two more traps worth knowing:
 
@@ -389,6 +431,10 @@ npm publish                    # publishConfig pins the registry to registry.npm
   to the package version, so it does not move with it.
 - When runtime behaviour changes, update `engines.dsh` and the `@deepseek-ai/dsh-tools` peer range together —
   they decide whether the Plugins page reports an incompatibility.
+- `@deepseek-ai/schemastery` in `dependencies` is a **real dependency** (the settings form needs it) and pnpm
+  installs it for the user. Before widening its range, check that the target DSH version still has the schema
+  API used here (`.default/.description/.min/.volatile`); otherwise the form takes the degraded path
+  (`Config === undefined` — everything still works, there is just no visual configuration).
 
 ## License
 

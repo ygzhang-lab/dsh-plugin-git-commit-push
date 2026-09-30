@@ -17,7 +17,7 @@
 | 表面 | 名字 | 谁用它 |
 |---|---|---|
 | 工具 | `git_commit_push`（`prepare` / `apply` / `auto`） | 模型 |
-| 斜杠命令 | `/commit-push` | 人，**完全不经过模型** |
+| 斜杠命令 | `/git-commit-push` | 人，**完全不经过模型** |
 | Skill | `git-commit-push` | 模型，按需加载的完整流程说明 |
 
 - 平台：**Windows 与 macOS / Linux 都可用**（见「跨平台」）
@@ -76,15 +76,16 @@ sh setup.sh web --uninstall
 
 重启 DSH 后：
 
-- 模型能看到 `git_commit_push` 工具，输入框里能敲 `/commit-push`；
+- 模型能看到 `git_commit_push` 工具，输入框里能敲 `/git-commit-push`；
 - 设置 → 插件里能看到本包（标题「Git 提交与推送」，带图标），可启用 / 停用 / 卸载；
-- 模型技能目录里有 `git-commit-push`。
+- 模型技能目录里有 `git-commit-push`；
+- 设置里能找到本插件的**配置表单**（11 个字段，改完即时生效、无需重启）。
 
 ## 触发条件（务必先读）
 
 **只在两种情况下使用，绝不自动触发：**
 
-1. **用户敲斜杠命令 `/commit-push`** —— 由命令直接执行，完全不经过模型；
+1. **用户敲斜杠命令 `/git-commit-push`** —— 由命令直接执行，完全不经过模型；
 2. **用户明确要求** git 提交/推送 —— 「提交」「commit」「推送」「push」这类直白指令。
 
 **改完代码、任务完成、会话快结束、用户说「存档」「好了」——都不是触发条件。** 编辑文件不等于要求提交。
@@ -100,7 +101,7 @@ sh setup.sh web --uninstall
 
 | 路径 | 模型 token | 说明 |
 |---|---|---|
-| **1. 斜杠命令 `/commit-push`** | **0（真的 0）** | 完全不产生模型请求。命令的发现、执行与 UI 输出**不产生模型 token**，结果只渲染在 UI 里、**不进对话历史**。这是**唯一**真正 0 token 的路径。 |
+| **1. 斜杠命令 `/git-commit-push`** | **0（真的 0）** | 完全不产生模型请求。命令的发现、执行与 UI 输出**不产生模型 token**，结果只渲染在 UI 里、**不进对话历史**。这是**唯一**真正 0 token 的路径。 |
 | **2. 工具 `git_commit_push(auto)`** | 少量 | 模型要生成这次工具调用（参数 + 思考）。提交信息由插件自己写，所以**没有**第二轮；返回卡片约 200 token。一次往返。 |
 | **3. 工具 `prepare` + `apply`（默认）** | 约 2 次往返 | 只有 `prepare` 卡片（约 200 token）和 `apply` 的 `message` 参数进上下文，**不读 diff**。 |
 
@@ -111,9 +112,9 @@ sh setup.sh web --uninstall
 - 说「**省 token**」—— 准确，但省的是**比较级**：省掉读 git 原始输出（数千 token → 约 200）与多轮往返。
 
 还有一个**固定成本**必须说清楚：只要插件装着且工具对模型可见，它的 schema（描述约 1.5 KB + 参数）会进入**每次**请求，约 **600 token**。
-**若你只想用 `/commit-push`、从不让模型调用它**，把工具移出模型可见面（或改用 `deferLoading` 按需加载）可以省掉这笔固定成本。
+**若你只想用 `/git-commit-push`、从不让模型调用它**，把工具移出模型可见面（或改用 `deferLoading` 按需加载）可以省掉这笔固定成本。
 
-一句话：**`/commit-push` 是 0 token；工具路径是「更省 token」，不是 0。**
+一句话：**`/git-commit-push` 是 0 token；工具路径是「更省 token」，不是 0。**
 
 ## 用
 
@@ -125,8 +126,8 @@ git_commit_push({ action: "apply", message: "…", tag: "v1.2.3" })
 git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不是仓库时
 ```
 
-`/commit-push` 变体（**0 token，完全不经过模型**）：
-`/commit-push`、`/commit-push --prepare`、`/commit-push --no-push`、`/commit-push --en`、`/commit-push --tag=v1.2.3`、`/commit-push 修复登录超时`。
+`/git-commit-push` 变体（**0 token，完全不经过模型**）：
+`/git-commit-push`、`/git-commit-push --prepare`、`/git-commit-push --no-push`、`/git-commit-push --en`、`/git-commit-push --tag=v1.2.3`、`/git-commit-push 修复登录超时`。
 
 ### 卡片长什么样
 
@@ -154,30 +155,46 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不
 
 ## 配置
 
-**改设置的正确位置**是 DSH 主目录下的用户文件（npm 安装时包本体在 `node_modules` 里，
-编辑那里的文件会在下次安装/更新时丢失）：
+**首选：在 DSH 自己的设置里改。** 本插件导出 Cordis `Config` schema，所以它的挂载行接受 `config` 映射——
+DSH 的 settings 服务据此自动生成一个命名空间，设置页把它渲染成表单，
+`@deepseek-ai/dsh-config-editor` 把选择写进当前 profile 的 `cordis.patch.yml`（就在本包插入的那一行上），
+并通过 Loader 立即应用。所有字段都声明为 **volatile**，因此改完**不 remount、不用重启 DSH**，
+下一次工具调用就生效。
 
-```
-<DSH_HOME>/git-commit-push.config.json          # 默认 ~/.dsh/git-commit-push.config.json
-```
+**三层来源，自上而下覆盖：**
 
-优先级：**用户文件 > 包内模板（`git-commit-push.config.json`）> 内置默认值**。
-文件缺失不是错误（用默认值）；文件存在但不是合法 JSON 时，结果卡片里会追加一行
-「配置未生效：…」，而不是静默忽略。改完**下次调用即生效**，不需要重启 DSH；没写的键保持默认值。
-
-| 键 | 默认 | 说明 |
+| 层 | 位置 | 谁写它 |
 |---|---|---|
-| `autoPush` | `true` | 提交后推送 |
-| `autoAdd` | `true` | 提交前 `git add -A` |
-| `tagOnVersionChange` | `true` | 版本文件变动 → 询问打 tag |
-| `tagOnBreaking` | `true` | 检测到公共声明被删除 → 询问 |
-| `tagOnFileCount` | `10` | 改动文件数 ≥ N → 询问（`0` 关闭）|
-| `tagPrefix` | `"v"` | 建议标签前缀 |
-| `askBeforeTag` | `true` | `false` 则不问，直接打建议标签（唯一会「不问就打」的开关）|
-| `askTimeoutMs` | `120000` | 标签询问等待上限 |
-| `defaultLanguage` | `"zh"` | 规则生成信息的语言（`zh`/`en`）|
-| `maxFilesShown` | `12` | 卡片最多列几个文件 |
-| `pinnedIdentity.name/email` | 空 | 非空时以 `-c user.name/-c user.email` **仅对本次提交**生效；不改你的 git 配置 |
+| 1 | 挂载行的 `config`（profile 的 `cordis.patch.yml`） | DSH 设置页的表单 |
+| 2 | `<DSH_HOME>/git-commit-push.config.json`（默认 `~/.dsh/git-commit-push.config.json`） | 你自己编辑；`link:`/离线安装的兜底 |
+| 3 | 包内模板 `git-commit-push.config.json` | 随包出货 |
+| — | 内置默认值 | 兜住以上都没设的字段 |
+
+文件缺失不是错误（用默认值）；文件存在但不是合法 JSON 时，结果卡片里会追加一行
+「配置未生效：…」，而不是静默忽略。没写的键保持默认值。
+
+| 键 | 默认 | 说明 | 表单 |
+|---|---|---|---|
+| `autoPush` | `true` | 提交后推送 | ✅ |
+| `autoAdd` | `true` | 提交前 `git add -A` | ✅ |
+| `tagOnVersionChange` | `true` | 版本文件变动 → 询问打 tag | ✅ |
+| `tagOnBreaking` | `true` | 检测到公共声明被删除 → 询问 | ✅ |
+| `tagOnFileCount` | `10` | 改动文件数 ≥ N → 询问（`0` 关闭）| ✅ |
+| `tagPrefix` | `"v"` | 建议标签前缀 | ✅ |
+| `askBeforeTag` | `true` | `false` 则不问，直接打建议标签（唯一会「不问就打」的开关）| ✅ |
+| `askTimeoutMs` | `120000` | 标签询问等待上限 | ✅ |
+| `defaultLanguage` | `"zh"` | 规则生成信息的语言（`zh`/`en`）| ✅ |
+| `maxFilesShown` | `12` | 卡片最多列几个文件 | ✅ |
+| `pinnedIdentity.name/email` | 空 | 非空时以 `-c user.name/-c user.email` **仅对本次提交**生效；不改你的 git 配置 | ✅ |
+
+> 表单所在的具体位置取决于你的 DSH 版本（设置里的插件/配置入口）。**设置 → 插件 → 插件列表**那个标签是**只读**的
+> （官方描述：inspect plugins *without changing their configuration*），可编辑的表单来自 settings 服务那条路径。
+> 字段说明是中文（提交信息的默认语言），DSH 目前没有按字段本地化。
+
+**为什么还需要 JSON 文件**：`Config` schema 需要 `@deepseek-ai/schemastery`。本包把它声明为**普通依赖**，
+npm 安装时随包装上；而 `link:`（源码 checkout）安装时 pnpm 不会装链接目标的依赖，宿主的模块解析也未必覆盖到它。
+那种情况下插件**照常工作**，只是没有表单（`Config` 为 `undefined`），此时 JSON 文件就是唯一的配置入口——
+这也是它继续存在、并且优先级高于模板的原因。
 
 环境变量：
 
@@ -191,7 +208,7 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不
 
 - 想**覆盖**它：在工作区放一个同名项目级 skill（`.agents/skills/git-commit-push/SKILL.md`）。注册表按优先级排序，
   **项目级 > 运行时注册**，你自己的版本会生效。
-- 环境里没有技能注册表也能正常工作：skill 与 `/commit-push` 命令都是**可选能力**（用 scoped
+- 环境里没有技能注册表也能正常工作：skill 与 `/git-commit-push` 命令都是**可选能力**（用 scoped
   `ctx.inject` 等它出现），缺任何一个都不影响 `git_commit_push` 工具本身。
 - **从早期版本迁过来**：如果你曾把老 SKILL.md 手工装到 `~/.agents/skills/git-commit/`，那是一份**另一个名字**的
   用户级 skill，会与随包的 `git-commit-push` 同时出现在技能目录里。内容已被本包接管，建议删掉那个目录
@@ -229,7 +246,7 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（64 项）
+node self-test.mjs              # 纯逻辑 + 打包 / 配置 / 表单 / skill 契约（75 项）
 node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交（20 项）
 node capture-git-format.mjs     # 只打印真实 git 的 -z 原始字节，用于诊断分帧问题
 ```
@@ -242,7 +259,7 @@ Windows 上用 DSH 自带的 node：
 
 `self-test-git.mjs` 里有一条测试**故意独立于实现**：它同时用 `git status --porcelain -z` 和**非 NUL 的普通格式**问 git 同一个问题，要求两者描述同一组路径。这样解析器写错时测试会失败，而不是跟着实现一起错。
 
-这条测试的由来值得记一笔：第一版 `lib/survey.js` 从一个**不导出该名字**的模块 import 了一个函数。ESM 链接期错误让整个插件图无法求值——`git_commit_push` 和 `/commit-push` 都不会注册。而当时的纯逻辑测试因为不 import `survey.js`，根本碰不到它。现在两个测试文件都显式 import 完整模块图，并且 `apply()` 在注册前会用 `toolDefinitionProblems()` 自检 schema。
+这条测试的由来值得记一笔：第一版 `lib/survey.js` 从一个**不导出该名字**的模块 import 了一个函数。ESM 链接期错误让整个插件图无法求值——`git_commit_push` 和 `/git-commit-push` 都不会注册。而当时的纯逻辑测试因为不 import `survey.js`，根本碰不到它。现在两个测试文件都显式 import 完整模块图，并且 `apply()` 在注册前会用 `toolDefinitionProblems()` 自检 schema。
 
 `self-test.mjs` 最后两节查的是**打包与运行时契约**，不是算法：
 
@@ -250,6 +267,8 @@ Windows 上用 DSH 自带的 node：
 - **`files` 白名单是否覆盖入口点 import 的每一个相对模块**——这是 npm 发布最常见的翻车点：包能装上，一加载就找不到模块；
 - 插件页要读的 `exports` 子路径、`locale/*.json`、`icon`（相对路径、类型、≤256 KiB）；
 - 每个 DSH peer 都是 `optional`（否则 pnpm 会试图把宿主包装进用户 profile）、`dsh.manifestVersion`、`engines.dsh`；
+- **配置三层来源与字段表的一致性**：字段表 ↔ 内置默认值 ↔ 包内模板三者不许漂移、UI（挂载行 config）胜过 JSON 文件、`pinnedIdentity` 按 key 合并、以及"只有与默认值不同的解析值才算用户改过"这条判定；
+- **设置表单可发布或可降级**：`@deepseek-ai/schemastery` 能解析时 `Config` 必须建出来且每个字段都是 volatile；解析不到时 `Config` 必须是 `undefined` 且**工具照样注册**；
 - 配置优先级（用户文件 > 包内模板）与**损坏的配置必须被报告**；
 - SKILL.md 解析出的 skill 定义满足注册表 `validateRuntimeSkill` 的规则，且 `apply()` 在模拟宿主上确实注册了工具 + 命令 + skill。
 
@@ -258,7 +277,7 @@ Windows 上用 DSH 自带的 node：
 ## 结构
 
 ```
-index.js                 插件入口：工具定义、/commit-push 命令、skill 注册、编排（prepare/apply/auto）
+index.js                 插件入口：工具定义、/git-commit-push 命令、skill 注册、编排（prepare/apply/auto）
 cordis.patch.yml         组合包 patch：唯一一处挂载行（dsh.bundle.patch 指向它）
 icon.svg                 插件页图标（package.json 的 icon）
 locale/en.json           插件页显示文本（meta.title / meta.description，英文）
@@ -266,20 +285,24 @@ locale/zh.json           同上，中文
 lib/git.js               唯一的 git 调用层：固定 argv、超时、输出上限、porcelain 解析、平台探测
 lib/analyze.js           改动分类 + 规则化 Conventional Commits 生成 + 卡片渲染
 lib/survey.js            一次仓库摸底：status / numstat / log / 有界 diff
-lib/config.js            配置读取：用户文件 > 包内模板 > 默认值，并报告损坏的文件
+lib/config.js            配置读取 + 字段表：挂载行 config > 用户文件 > 模板 > 默认值，并报告损坏的文件
+lib/schema.js            Cordis Config（schemastery）：可视化表单 + volatile 字段；库不可达时优雅降级
 lib/skill.js             从 SKILL.md 解析出运行时 skill 定义（含 frontmatter 解析）
 lib/profile-edit.mjs     两个安装脚本共用的 profile 清单编辑器（幂等、保留未知字段、无 BOM、自校验）
 setup.ps1                Windows 安装 / 卸载（方式 C）
 setup.sh                 macOS / Linux 安装 / 卸载（方式 C）
-self-test.mjs            纯逻辑 + 打包契约自检（64 项）
+self-test.mjs            纯逻辑 + 打包 / 配置 / 表单契约自检（75 项）
 self-test-git.mjs        真实 git 集成自检（20 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（诊断分帧问题）
 e2e-check.mjs            直连调用 run()，用于不重启验证提交路径
 ```
 
-设计取舍：工具定义是**手写对象**而不是 `defineTool(...)`，配置是 **JSON 文件**而不是 Cordis `Config` schema ——
-因为本包**刻意不 import 任何 `@deepseek-ai/*`**：它既可能以 `link:` 挂在 profile 外，也可能以 npm 包形式
-躺在 `node_modules` 里，装载不应因为宿主的模块解析没覆盖到本包而失败。
+设计取舍：工具定义是**手写对象**而不是 `defineTool(...)`；运行时的宿主 import 只有一处例外——
+`lib/schema.js` 用 `createRequire` 取 `@deepseek-ai/schemastery` 来声明 `Config`，而且**整段包在 try/catch 里**：
+取不到就 `Config === undefined`（没有表单），插件与工具照常工作。其余模块仍然只 import Node 内置与相对路径，
+因为本包既可能以 `link:` 挂在 profile 外，也可能以 npm 包形式躺在 `node_modules` 里，
+装载不应因为宿主的模块解析没覆盖到本包而失败。（`@deepseek-ai/schemastery` 声明为普通 `dependencies`，
+npm 安装时随包装上；`link:` 安装时 pnpm 不装链接目标的依赖，所以这条降级路径是真实存在的，不是理论情况。）
 
 代价是必须手写**真正的 JSON Schema**：`parameters` 需要 `type: "object"` + `properties` + `required: []`，`output.schema` 的 `required` 必须是**字符串数组**
 （`defineTool` 的 per-property `required: true` 语法只由 `defineTool` 自己编译；手写定义直接送进注册表会被拒，且是在**注册时**抛错，整个插件都装不上）。`toolDefinitionProblems()` 就是这条规则的回归测试。
@@ -301,6 +324,8 @@ e2e-check.mjs            直连调用 run()，用于不重启验证提交路径
 4. **`dsh.manifestVersion` 与 `engines.dsh` 目前只作声明**（安装器与 loader 都不强制），但它们是 `@deepseek-ai/dsh-package-manifest` 记载的公开作者字段，所以本包照写。
 5. **显示元数据**由 `readPluginMeta` 通过 Node 解析 `<包名>/package.json`、`<包名>/locale/*.json` 与 `package.json` 的 `icon`（相对路径、SVG/PNG/JPEG/WebP、≤256 KiB、必须留在包目录内）得到，`locale/en.json` 是基准文件。
 6. **嵌入式 skill** 用 `ctx.skills.register({ name, description, content, … })`：`name` 必须匹配 `/^[a-z0-9]+(?:-[a-z0-9]+)*$/`，`description` 与 `content` 必须是非空字符串（加载时按 `validateDefinition` 再校验一次），`provider` 由注册表填成 `runtime`，优先级为 **项目级 > 运行时 > 用户级**。
+7. **可视化配置 = 导出 `Config` schema（schemastery，zod 风格）。** DSH 的设置服务（`@deepseek-ai/dsh-settings` + `@deepseek-ai/dsh-config-editor`）为声明了 `Config` 的条目自动生成命名空间与表单（`SettingsNamespaceView.autoGenerate`），写入落到该条目在 profile patch 里的 `config`；插件可 `settings.configure({ auto: false })` 退出自动表单。**被 `.volatile()` 标记的字段**只提交新值并广播 `loader/volatile-update`（Loader 用 `equalExceptVolatile` 比较），**不 remount**；普通字段变化会重新挂载该行。volatile 的放置有硬规则：必须在固定对象路径上，不能落在 dict 值、数组项、map key 或 union/lazy 分支里（`validateVolatileSchema` 会抛错）。
+8. **设置页不是万能的**：`@deepseek-ai/dsh-settings` 只展示"活动且可唯一定位条目的 volatile 字段"，**插件列表**标签是只读的，而 `pluginManager/*` 那套 RPC 只负责装/启用/停用/卸载——所以"能可视化配置"的唯一条件是**插件自己声明 `Config`**。
 
 另外两条容易踩的：
 
@@ -319,6 +344,9 @@ npm publish                    # publishConfig 已把 registry 固定为 registr
 - 发布后 npmmirror 等镜像有同步延迟，用户立刻装可能拿不到最新版。
 - 版本按 SemVer 递增；`dsh.manifestVersion` 是**清单格式**标识，与包版本无关，不要跟着改。
 - 改了运行时行为就同步 `engines.dsh` 与 `peerDependencies` 里 `@deepseek-ai/dsh-tools` 的范围，两者决定插件页会不会给出「与 DSH 不兼容」的提示。
+- `dependencies` 里的 `@deepseek-ai/schemastery` 是**真实依赖**（设置表单要用）：用户那边由 pnpm 正常安装。
+  改它的范围前先确认目标 DSH 版本里 schema API（`.default/.description/.min/.volatile`）没变，否则表单会走降级路径
+  （`Config === undefined`，功能不受影响但没有可视化配置）。
 
 ## 许可
 

@@ -204,7 +204,7 @@ if (-not $Uninstall) {
   Write-Host ''
   Write-Host '  After the restart you get:' -ForegroundColor Gray
   Write-Host '    - a tool named  git_commit_push   (prepare / apply / auto)' -ForegroundColor Gray
-  Write-Host '    - a slash command  /commit-push   (runs without the model, 0 tokens)' -ForegroundColor Gray
+  Write-Host '    - a slash command  /git-commit-push   (runs without the model, 0 tokens)' -ForegroundColor Gray
   Write-Host ''
   Write-Host '  The plugin is a declared bundle, so Settings > Plugins can now' -ForegroundColor Gray
   Write-Host '  enable, disable and uninstall it without this script.' -ForegroundColor Gray

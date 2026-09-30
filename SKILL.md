@@ -1,6 +1,6 @@
 ---
 name: git-commit-push
-description: 仅当用户明确要求时才使用（用户敲 /commit-push 斜杠命令，或直接说「git 提交 / 提交 / commit / 推送 / push」）。用 DSH 的 git_commit_push 工具一步完成：检查仓库、汇总改动、按 Conventional Commits 生成信息、提交、必要时询问打 tag、推送；未初始化 Git 则不做任何操作。绝不自动触发。
+description: 仅当用户明确要求时才使用（用户敲 /git-commit-push 斜杠命令，或直接说「git 提交 / 提交 / commit / 推送 / push」）。用 DSH 的 git_commit_push 工具一步完成：检查仓库、汇总改动、按 Conventional Commits 生成信息、提交、必要时询问打 tag、推送；未初始化 Git 则不做任何操作。绝不自动触发。
 ---
 
 # Skill: git-commit-push
@@ -9,7 +9,7 @@ description: 仅当用户明确要求时才使用（用户敲 /commit-push 斜�
 
 **只在下面两种情况下使用，任何其他情况都不得触发：**
 
-1. 用户敲了斜杠命令 **`/commit-push`**（此时命令自己跑完，不经过你）；
+1. 用户敲了斜杠命令 **`/git-commit-push`**（此时命令自己跑完，不经过你）；
 2. 用户**明确要求** git 提交或推送——「提交」「提交一下」「commit」「推送」「push」「推上去」「git 提交/推送」这类直白指令。
 
 **绝不自动触发。** 即使出现下列情形，也不要调用本工具，也不要主动提议：
@@ -30,7 +30,7 @@ description: 仅当用户明确要求时才使用（用户敲 /commit-push 斜�
 所以**不要**读 diff、不要读 `.gitignore`、不要查 `git log` —— 卡片里已经有了，那些输出只会白烧 token。
 tag 询问也由插件内置完成（选项框直接弹给用户，不消耗 token），**不要**再用 `ask_user_question` 问 tag。
 
-**省的是什么**：省掉的是「读 git 原始输出」（数千 token → 约 200）与多余往返。工具路径本身**不是** 0 token —— 模型仍要为每次工具调用与卡片付 token；只有用户直接敲 `/commit-push`（完全不经过模型）才是真的 0 token。所以**不要**以「省 token」为理由主动多调一次工具。
+**省的是什么**：省掉的是「读 git 原始输出」（数千 token → 约 200）与多余往返。工具路径本身**不是** 0 token —— 模型仍要为每次工具调用与卡片付 token；只有用户直接敲 `/git-commit-push`（完全不经过模型）才是真的 0 token。所以**不要**以「省 token」为理由主动多调一次工具。
 
 插件在 Windows 与 macOS/Linux 上行为一致；`cwd` 参数请用该平台的原生绝对路径（Windows `D:\proj`，macOS `/Users/me/proj`）。
 

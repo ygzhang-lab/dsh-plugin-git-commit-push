@@ -1,5 +1,5 @@
 {
-  "$comment": "Settings for dsh-plugin-git-commit-push. This copy is the TEMPLATE that ships with the package. To change settings, put your own file at <DSH_HOME>/git-commit-push.config.json (default: ~/.dsh/git-commit-push.config.json): it wins over this one, and it survives reinstalling or updating the package. A source checkout may edit this file directly instead. The next tool call picks changes up — no DSH restart. Omitted keys keep the built-in defaults; a malformed file is reported in the result card rather than ignored.",
+  "$comment": "Settings for dsh-plugin-git-commit-push. PREFERRED: edit them in DSH's own settings form (the plugin exports a Config schema, so its row is editable there and applies live). This file is the fallback layer: put a copy at <DSH_HOME>/git-commit-push.config.json (default ~/.dsh/git-commit-push.config.json) and it wins over the template below, but loses to anything set in the form. The next tool call picks changes up — no DSH restart. Omitted keys keep the built-in defaults; a malformed file is reported in the result card rather than ignored.",
   "autoPush": true,
   "autoAdd": true,
   "tagOnVersionChange": true,

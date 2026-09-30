@@ -28,9 +28,10 @@ import { fileURLToPath } from 'node:url'
 import { git, parseStatusZ, tagNameError } from './lib/git.js'
 import { buildMessage, inferType, scopeOf, totalsOf, typeOfPath, declaredSymbols, removedDeclarationCount, renderCard } from './lib/analyze.js'
 import { normalizeEntries } from './lib/survey.js'
-import { loadSettingsReport, DEFAULTS } from './lib/config.js'
-import { parseSkillFile, skillDefinition, SKILL_PATH } from './lib/skill.js'
-import { apply, inject, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
+import { loadSettingsReport, DEFAULTS, FIELDS as CONFIG_FIELDS, IDENTITY_FIELDS, resolveSettings, uiOverrides } from './lib/config.js'
+import { buildConfigSchema, loadSchemaLibrary, schemaBuildProblem, CONFIG } from './lib/schema.js'
+import { parseSkillFile, skillDefinition, SKILL_NAME, SKILL_PATH } from './lib/skill.js'
+import { apply, inject, COMMAND_NAME, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
 
 let passed = 0
 const failures = []
@@ -167,6 +168,31 @@ check('english mode produces an english subject', () => {
   assert.match(built.message, /update thing/)
 })
 
+check('english mode localizes the body too, not just the subject', () => {
+  // A commit whose subject is English and whose bullets are Chinese reads like
+  // an accident; the language setting covers the whole message.
+  const built = buildMessage({
+    entries: [
+      { status: 'M', path: 'src/a.ts' },
+      { status: 'M', path: 'src/b.ts' },
+    ],
+    stats: statMap({ 'src/a.ts': { added: 2, deleted: 1, binary: false }, 'src/b.ts': { added: 1, deleted: 1, binary: false } }),
+    unifiedDiff: '+export function thing() {}\n',
+    language: 'en',
+  })
+  assert.equal(/[\u4e00-\u9fa5]/u.test(built.message), false, built.message)
+  assert.match(built.message, /- 3 files changed \(\+3 \/ -2\)|files changed/)
+  assert.match(built.message, /- Touches: thing/)
+
+  const chinese = buildMessage({
+    entries: [{ status: 'M', path: 'src/a.ts' }, { status: 'M', path: 'src/b.ts' }],
+    stats: statMap({ 'src/a.ts': { added: 2, deleted: 1, binary: false }, 'src/b.ts': { added: 1, deleted: 1, binary: false } }),
+    unifiedDiff: '+export function thing() {}\n',
+  })
+  assert.match(chinese.message, /变更文件 2 个/)
+  assert.match(chinese.message, /涉及：thing/)
+})
+
 check('declaredSymbols ignores diff headers and comments', () => {
   const symbols = declaredSymbols('+++ b/src/a.ts\n+// export function fake()\n+export function real()\n')
   assert.deepEqual(symbols, ['real'])
@@ -218,9 +244,9 @@ check('card reports tag evidence and deletion count', () => {
   assert.match(card, /无 upstream/)
 })
 
-console.log('\nargument parsing (/commit-push)')
+console.log('\nargument parsing (/git-commit-push)')
 
-check('bare /commit-push is auto', () => {
+check('bare /git-commit-push is auto', () => {
   assert.deepEqual(parseCommitCommand(''), { action: 'auto' })
 })
 check('--prepare is preview only', () => {
@@ -441,7 +467,15 @@ check('the manifest carries what npm and the Plugins page need', () => {
   assert.equal(manifest.publishConfig.registry, 'https://registry.npmjs.org/')
   assert.equal(manifest.publishConfig.access, 'public')
   assert.equal(Array.isArray(manifest.keywords) && manifest.keywords.length >= 5, true)
-  assert.match(manifest.scripts.prepublishOnly, /self-test\.mjs/)
+  // npm and pnpm strip publish-only scripts from the packed manifest, and this
+  // test ships inside the tarball: an installed copy legitimately lacks it.
+  const prepublish = manifest.scripts?.prepublishOnly
+  assert.equal(
+    prepublish === undefined || /self-test\.mjs/u.test(prepublish),
+    true,
+    'prepublishOnly must run the self-tests when the packer keeps it',
+  )
+  assert.match(manifest.scripts.test, /self-test\.mjs/u)
 })
 
 check('the dsh manifest follows the documented convention', () => {
@@ -464,6 +498,15 @@ check('no DSH peer is ever installed by the consumer', () => {
     assert.match(peer, /^@deepseek-ai\/dsh(-|$)/, `${peer} is not a DSH package; drop it or make it a real dependency`)
     assert.equal(manifest.peerDependenciesMeta?.[peer]?.optional, true, `${peer} must be an optional peer`)
   }
+})
+
+check('the schema library is a dependency, never a peer', () => {
+  // A profile sets `autoInstallPeers: false`, so a peer would never be
+  // installed: the settings form would silently disappear for every user.
+  const range = manifest.dependencies?.['@deepseek-ai/schemastery']
+  assert.equal(typeof range, 'string', '@deepseek-ai/schemastery must be a dependency')
+  assert.match(range, /^\^?\d+\.\d+\.\d+/)
+  assert.equal(manifest.peerDependencies?.['@deepseek-ai/schemastery'], undefined)
 })
 
 check('the icon satisfies the registry rules', () => {
@@ -614,8 +657,20 @@ check('apply registers the tool, the command and the skill', () => {
     logger: { warn: () => {} },
   })
   assert.deepEqual(registered.tools.map(tool => tool.name), ['git_commit_push'])
-  assert.deepEqual(registered.commands.map(command => command.name), ['commit-push'])
+  assert.deepEqual(registered.commands.map(command => command.name), ['git-commit-push'])
   assert.deepEqual(registered.skills.map(skill => skill.name), ['git-commit-push'])
+})
+
+check('one name covers the command, the skill, the bundle row and the package', () => {
+  // The user-visible name of this plugin should not need looking up twice: the
+  // slash command, the skill, the Loader row id and the npm package (minus its
+  // scope prefix) are the same string.
+  const expected = manifest.name.replace(/^dsh-plugin-/u, '')
+  assert.equal(expected, 'git-commit-push')
+  assert.equal(COMMAND_NAME, expected, 'the slash command name')
+  assert.equal(SKILL_NAME, expected, 'the skill name')
+  const rows = insertRows(readFileSync(join(PACKAGE_DIR, bundlePatch), 'utf8'))
+  assert.equal(rows[0].id, expected, 'the Loader row id')
 })
 
 check('the optional services stay optional in the static inject list', () => {
@@ -632,6 +687,90 @@ check('apply survives a host with no command and no skill surface', () => {
     logger: { warn: () => {} },
   })
   assert.equal(registered, 1)
+})
+
+console.log('\nthe settings form (Config schema)')
+
+check('the field table matches the built-in defaults', () => {
+  // One table drives the schema, the merge and this test: a field added to one
+  // and forgotten in the other is how a form ends up writing values no code reads.
+  for (const field of CONFIG_FIELDS) {
+    assert.equal(Object.hasOwn(DEFAULTS, field.key), true, `${field.key} is missing from DEFAULTS`)
+    assert.equal(typeof DEFAULTS[field.key], field.kind, `${field.key} default type`)
+    assert.equal(typeof field.label === 'string' && field.label.trim() !== '', true, `${field.key} needs a form label`)
+  }
+  for (const field of IDENTITY_FIELDS) {
+    assert.equal(Object.hasOwn(DEFAULTS.pinnedIdentity, field.key), true, `pinnedIdentity.${field.key}`)
+    assert.equal(typeof field.label === 'string' && field.label.trim() !== '', true, `pinnedIdentity.${field.key} needs a label`)
+  }
+  const listed = new Set(CONFIG_FIELDS.map(field => field.key))
+  for (const key of Object.keys(DEFAULTS)) {
+    if (key === 'pinnedIdentity') continue
+    assert.equal(listed.has(key), true, `${key} has a default but no form field`)
+  }
+})
+
+check('the shipped template names every field', () => {
+  const template = JSON.parse(readFileSync(join(PACKAGE_DIR, 'git-commit-push.config.json'), 'utf8'))
+  for (const field of CONFIG_FIELDS) assert.equal(Object.hasOwn(template, field.key), true, `template is missing ${field.key}`)
+  for (const field of IDENTITY_FIELDS) {
+    assert.equal(Object.hasOwn(template.pinnedIdentity ?? {}, field.key), true, `template is missing pinnedIdentity.${field.key}`)
+  }
+})
+
+check('the schema is published, or degrades without taking the plugin down', () => {
+  // @deepseek-ai/schemastery is a real dependency, but a `link:` install can
+  // only reach it through the launcher's runtime resolution. Either outcome is
+  // supported: a form, or no form with the tool still registered.
+  const library = loadSchemaLibrary()
+  if (library === undefined) {
+    assert.equal(CONFIG, undefined, 'without the library there must be no schema')
+    assert.equal(buildConfigSchema(undefined), undefined)
+    let registered = 0
+    apply({ tools: { register: () => { registered += 1 } }, inject: () => {}, logger: { warn: () => {} } })
+    assert.equal(registered, 1, 'the tool must still register')
+  } else {
+    assert.equal(typeof CONFIG, 'function', `the schema must be built when the library resolves (${schemaBuildProblem() ?? 'no recorded problem'})`)
+    assert.equal(typeof CONFIG.dict, 'object')
+    for (const field of CONFIG_FIELDS) {
+      assert.equal(CONFIG.dict[field.key]?.meta?.volatile, true, `${field.key} must be volatile to apply without a remount`)
+    }
+  }
+})
+
+check('the row config outranks the settings file', () => {
+  const file = { ...DEFAULTS, autoPush: true, tagPrefix: 'file-', maxFilesShown: 7 }
+  const merged = resolveSettings({ ui: { autoPush: false, tagPrefix: 'ui-' }, file })
+  assert.equal(merged.autoPush, false, 'the form wins')
+  assert.equal(merged.tagPrefix, 'ui-', 'the form wins for the same field')
+  assert.equal(merged.maxFilesShown, 7, 'the file still supplies fields the form did not set')
+})
+
+check('pinnedIdentity merges per key, not wholesale', () => {
+  const file = { ...DEFAULTS, pinnedIdentity: { name: 'From File', email: 'file@example.com' } }
+  const merged = resolveSettings({ ui: { pinnedIdentity: { name: 'From Form' } }, file })
+  assert.equal(merged.pinnedIdentity.name, 'From Form')
+  assert.equal(merged.pinnedIdentity.email, 'file@example.com', 'an untouched identity key must survive')
+})
+
+check('the raw row config is read as the UI layer', () => {
+  const ctx = { fiber: { entry: { options: { config: { autoPush: false, tagPrefix: 'form-' } } } } }
+  assert.deepEqual(uiOverrides(ctx, undefined), { autoPush: false, tagPrefix: 'form-' })
+})
+
+check('without the raw config, only values that differ from the defaults count', () => {
+  // A parsed config always carries defaults; treating those as "the user chose
+  // them" would make the form silently beat the settings file.
+  const parsed = { autoPush: false, autoAdd: DEFAULTS.autoAdd, pinnedIdentity: { name: '', email: 'me@example.com' } }
+  assert.deepEqual(uiOverrides({ get: () => undefined }, parsed), {
+    autoPush: false,
+    pinnedIdentity: { email: 'me@example.com' },
+  })
+})
+
+check('no context and no config means no UI layer at all', () => {
+  assert.deepEqual(uiOverrides({ get: () => undefined }, undefined), {})
+  assert.deepEqual(uiOverrides(undefined, undefined), {})
 })
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`)

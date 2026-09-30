@@ -11,7 +11,7 @@
  * all, because it never becomes a model message).
  *
  * WHEN IT MAY BE USED — the trigger policy
- * ONLY when the user asks for it: they typed the `/commit-push` slash command,
+ * ONLY when the user asks for it: they typed the `/git-commit-push` slash command,
  * or they said in words that they want a commit and/or push. There is no
  * automatic path. Finishing an edit, completing a task, or approaching the end
  * of a session is NOT a trigger, and the tool description states this to the
@@ -26,7 +26,11 @@
  * the fixed command set); never commits in a container directory — it reports
  * the candidate repositories instead.
  */
-import { loadSettingsReport, CONFIG_PATH, userConfigPath, configCandidates } from './lib/config.js'
+import {
+  loadSettingsReport, resolveSettings, uiOverrides,
+  CONFIG_PATH, userConfigPath, configCandidates,
+} from './lib/config.js'
+import { CONFIG } from './lib/schema.js'
 import { skillDefinition } from './lib/skill.js'
 import { survey } from './lib/survey.js'
 import {
@@ -46,7 +50,7 @@ export const inject = ['tools']
 export const TOOL_NAME = 'git_commit_push'
 
 /** Slash command name, without the leading slash. */
-export const COMMAND_NAME = 'commit-push'
+export const COMMAND_NAME = 'git-commit-push'
 
 /**
  * Reduce any thrown value to one bounded, printable line.
@@ -179,7 +183,7 @@ async function doCommit(ctx, exec, options) {
   const entries = options.entries
 
   if (settings.autoAdd) {
-    // `exec` is present for a tool call and absent for a `/commit-push` invocation
+    // `exec` is present for a tool call and absent for a `/git-commit-push` invocation
     // driven by tests or an embedding host, so the optional chain is required.
     stageAll(root, exec?.signal)
   }
@@ -344,7 +348,7 @@ function applyCard(options) {
 }
 
 /**
- * The single entry point behind both the tool and the `/commit-push` command.
+ * The single entry point behind both the tool and the `/git-commit-push` command.
  *
  * Settings are read here and passed down so that a settings file which exists
  * but does not parse can be REPORTED. Silently committing with the defaults
@@ -362,7 +366,10 @@ function applyCard(options) {
  * @returns {Promise<ReturnType<typeof valueOf>>}
  */
 export async function run(ctx, request, exec) {
-  const { settings, problem } = await loadSettingsReport()
+  const { settings: fileSettings, problem } = await loadSettingsReport()
+  // The row config — what DSH's own settings form wrote — outranks the JSON
+  // file; see lib/config.js for the precedence and lib/schema.js for the form.
+  const settings = resolveSettings({ ui: uiOverrides(ctx, PLUGIN_CONFIG), file: fileSettings })
   const result = await runWithSettings(ctx, request, exec, settings)
   if (problem === undefined) return result
   return {
@@ -490,7 +497,7 @@ async function runWithSettings(ctx, request, exec, settings) {
   // the thing that was asked for: it landed, so this is a success even when the
   // push did not. The push outcome is NOT hidden — `pushed` is false, the card
   // says so, and `error` carries the machine-branchable reason — but reporting
-  // `ok: false` here would make `/commit-push` fail on a commit that is safely in the
+  // `ok: false` here would make `/git-commit-push` fail on a commit that is safely in the
   // repository, which is worse than useless.
   const pushFailed = effective.autoPush === true && !pushResult.pushed
 
@@ -551,7 +558,7 @@ const TOOL_DEFINITION = {
     // an outward-facing repository change, so it must never be reached for by
     // inference from "the work looks finished".
     + 'CALL THIS ONLY WHEN THE USER ASKS FOR IT — either they asked you in words to commit and/or push '
-    + '(「提交」「commit」「推送」「push」「推上去」), or they typed a slash command for it. '
+    + '(「提交」「commit」「推送」「push」「推上去」), or they typed the `/git-commit-push` slash command. '
     + 'NEVER call it on your own initiative: not because you or the user just finished editing files, not because a '
     + 'task looks complete, not because the session is ending, and not as a tidy-up step. Editing files is not a '
     + 'request to commit them. If it is unclear whether the user wants a commit, ask first. '
@@ -664,7 +671,16 @@ const TOOL_DEFINITION = {
  */
 let PLUGIN_CONTEXT
 
-/** Parse the `/commit-push` command line into a request. */
+/**
+ * The config DSH parsed from our `Config` schema, captured in `apply`.
+ *
+ * Held rather than copied because a volatile field is a stable reference: the
+ * settings form updates it in place, so reading it per call is what makes a
+ * change apply without a remount.
+ */
+let PLUGIN_CONFIG
+
+/** Parse the `/git-commit-push` command line into a request. */
 export function parseCommitCommand(rawInput) {
   const tokens = rawInput.trim().split(/\s+/).filter(token => token !== '')
   const request = { action: 'auto' }
@@ -808,9 +824,13 @@ export function toolDefinitionProblems() {
  * Plugin entry point.
  *
  * @param {any} ctx host plugin context
+ * @param {any} [config] the row config DSH parsed from our `Config` schema
  */
-export function apply(ctx) {
+export function apply(ctx, config) {
   PLUGIN_CONTEXT = ctx
+  // Kept rather than read once: the settings form writes volatile fields into
+  // these running references, so every call reads the current values.
+  PLUGIN_CONFIG = config
   // Fail loudly and specifically here rather than with an opaque registry error:
   // a malformed definition is an authoring bug the host reports once, at boot.
   const problems = toolDefinitionProblems()
@@ -824,6 +844,9 @@ export function apply(ctx) {
 
 /** Diagnostics: the settings files this plugin reads, and the self-check hooks. */
 export { CONFIG_PATH, userConfigPath, configCandidates, TOOL_DEFINITION }
+export { CONFIG as Config }
+export { FIELDS as CONFIG_FIELDS, resolveSettings, uiOverrides } from './lib/config.js'
+export { buildConfigSchema, loadSchemaLibrary } from './lib/schema.js'
 export { skillDefinition, parseSkillFile, SKILL_NAME, SKILL_PATH, SKILL_SOURCE } from './lib/skill.js'
 export { survey } from './lib/survey.js'
 export { push, pushAfterRebase } from './lib/git.js'

@@ -180,7 +180,7 @@ else
   printf '  change needs a fresh ESM import. Quit DSH first, then start it again.\n\n'
   printf '  After the restart you get:\n'
   printf '    - tool   git_commit_push   (prepare / apply / auto)  [costs model tokens]\n'
-  printf '    - command /commit-push     (no model involved)      [0 model tokens]\n\n'
+  printf '    - command /git-commit-push  (no model involved)      [0 model tokens]\n\n'
   printf '  The plugin is a declared bundle, so Settings > Plugins can now enable,\n'
   printf '  disable and uninstall it without this script.\n\n'
   printf '  Settings: %s\n' "$plugin_dir/git-commit-push.config.json"
