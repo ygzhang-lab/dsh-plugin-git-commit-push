@@ -3,26 +3,37 @@
   Install dsh-plugin-git-commit-push into the active DSH profile.
 
 .DESCRIPTION
-  Wires the plugin into the profile's bundle stack in three deliberate steps:
+  Wires the plugin into the profile's bundle stack in two deliberate steps:
 
     1. adds the plugin to the profile's package.json as a `link:` dependency;
-    2. appends the package to `dsh.profile.bundles`;
-    3. appends the plugin's mount row to the profile's cordis.patch.yml.
+    2. appends the package to `dsh.profile.bundles`.
 
-  Step 1 and 2 change the bundle set, which a running profile does not pick up:
-  DSH must be restarted afterwards. Step 3 alone would hot-reload, but the
-  package has to be linked before it can be mounted. Every write is idempotent —
-  run this as many times as you like — and a backup of each file is written
-  before the first modification.
+  The mount row is deliberately NOT written into the profile's patch file: it
+  comes from the package's own bundle patch (`cordis.patch.yml`, declared as
+  `dsh.bundle.patch` in this package's package.json), which the launcher applies
+  for every profile that selects the bundle. That declaration is also what makes
+  the package manageable: the Plugins page can enable, disable and uninstall a
+  bundle, and refuses every action on a package without one with the diagnostic
+  "这个包没有声明组合包，不能作为插件管理" (`not-bundle`).
+
+  A profile set up by an earlier revision of this script still carries a
+  hand-written mount row in its cordis.patch.yml under the marker block below.
+  Loader `insert` is append-only — two inserts of the same id mount the plugin
+  twice — so this script strips that legacy block whenever it finds one.
+
+  Steps 1 and 2 change the bundle set, which a running profile does not pick up:
+  DSH must be restarted afterwards. Every write is idempotent — run this as many
+  times as you like — and a backup of each file is written before the first
+  modification.
 
   Nothing here touches your git configuration, your repositories, or any DSH
-  setting other than the three edits above.
+  setting other than the edits above.
 
 .PARAMETER Profile
   Profile name under $env:USERPROFILE\.dsh\profiles. Defaults to `desktop`.
 
 .PARAMETER Uninstall
-  Reverses the three edits and removes the linked package.
+  Reverses the two edits, strips a legacy mount row and removes the linked package.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.dsh\local-plugins\dsh-plugin-git-commit-push\setup.ps1"
@@ -86,12 +97,14 @@ Write-Ok 'bundled node + pnpm located'
 # PROPERTY access on $file, which yields $null — the backup would silently land
 # in the current directory under a mangled name and the second file would never
 # be backed up at all.
-foreach ($file in @($packageJsonPath, $patchPath)) {
-  $backup = $file + '.git-commit-plugin.bak'
-  if (-not (Test-Path -LiteralPath $backup)) {
-    Copy-Item -LiteralPath $file -Destination $backup
-    Write-Ok "backed up $(Split-Path -Leaf $file) -> $(Split-Path -Leaf $backup)"
-  }
+#
+# The patch file is backed up further down, and only when this run actually has
+# to change it (the legacy mount-row migration). A fresh install leaves it
+# untouched.
+$manifestBackup = $packageJsonPath + '.git-commit-plugin.bak'
+if (-not (Test-Path -LiteralPath $manifestBackup)) {
+  Copy-Item -LiteralPath $packageJsonPath -Destination $manifestBackup
+  Write-Ok "backed up package.json -> $(Split-Path -Leaf $manifestBackup)"
 }
 
 # --- 3. Edit the profile manifest and patch layer --------------------------
@@ -111,38 +124,32 @@ if ($Uninstall) { $editArgs += '--remove' } else { $editArgs += @('--link', $plu
 if ($LASTEXITCODE -ne 0) { throw "profile manifest edit failed with exit code $LASTEXITCODE" }
 Write-Ok 'package.json updated'
 
-# The plugin is mounted by an EXPLICIT insert row in this profile's
-# cordis.patch.yml. That is not a stylistic choice: it was measured. With the
-# package linked and listed in dsh.profile.bundles but no row here, the loader
-# exposed no mount entry for this package at all and the plugin never loaded —
-# the bundle channel alone was not sufficient on the reserved `desktop` profile.
-# (The package therefore declares no `dsh.bundle.patch`; this row is the one
-# and only mount, so there is no double-mount to guard against.)
+# The plugin is mounted by the bundle patch this package ships
+# (cordis.patch.yml, declared as dsh.bundle.patch). Nothing is written into the
+# profile's own cordis.patch.yml on a fresh install.
 #
-# The marker block makes the edit idempotent and removable: it is stripped and
-# rewritten on every run, so repeated installs cannot stack two rows.
+# What this step does is the MIGRATION: an earlier revision of this script wrote
+# a mount row into the profile patch instead, and Loader `insert` is
+# append-only — leaving that row in place next to the bundle's own row would
+# mount the plugin twice. So the marker block is stripped whenever it is found;
+# the edit is idempotent (it is stripped and never rewritten) and the profile
+# patch is backed up first, because this is the only run that may change it.
 $beginMarker = '# >>> dsh-plugin-git-commit-push'
 $endMarker = '# <<< dsh-plugin-git-commit-push'
 $patchText = Get-Content -LiteralPath $patchPath -Raw
 $existingBlock = [regex]::Match($patchText, "(?s)\s*$([regex]::Escape($beginMarker)).*?$([regex]::Escape($endMarker))")
 if ($existingBlock.Success) {
+  $patchBackup = $patchPath + '.git-commit-plugin.bak'
+  if (-not (Test-Path -LiteralPath $patchBackup)) {
+    Copy-Item -LiteralPath $patchPath -Destination $patchBackup
+    Write-Ok "backed up cordis.patch.yml -> $(Split-Path -Leaf $patchBackup)"
+  }
   $patchText = $patchText.Remove($existingBlock.Index, $existingBlock.Length)
   $patchText = $patchText -replace "(\r?\n){3,}", "`n`n"
-}
-if ($Uninstall) {
   [System.IO.File]::WriteAllText($patchPath, "$($patchText.TrimEnd())`n", (New-Object System.Text.UTF8Encoding($false)))
-  Write-Ok 'cordis.patch.yml: mount row removed'
+  Write-Ok 'cordis.patch.yml: legacy mount row removed (the bundle patch mounts the plugin now)'
 } else {
-  $block = @(
-    $beginMarker
-    '- insert:'
-    '    - id: git-commit-push'
-    "      name: '$pluginName'"
-    $endMarker
-  ) -join "`n"
-  $combined = "$($patchText.TrimEnd())`n`n$block`n"
-  [System.IO.File]::WriteAllText($patchPath, $combined, (New-Object System.Text.UTF8Encoding($false)))
-  Write-Ok 'cordis.patch.yml: mount row inserted'
+  Write-Ok 'cordis.patch.yml: no legacy mount row to remove'
 }
 
 # --- 4. Link the package ---------------------------------------------------
@@ -165,8 +172,16 @@ if ($pnpmExit -ne 0) { throw "pnpm install failed with exit code $pnpmExit" }
 Write-Ok 'package linked into the profile'
 
 # --- 5. Verify -------------------------------------------------------------
+# On uninstall the linked directory is expected to be gone (pnpm pruned it in
+# step 4); reporting that as a warning would read like a failure.
 $linkedModule = Join-Path $profileDir "node_modules\$pluginName"
-if (Test-Path -LiteralPath $linkedModule) {
+if ($Uninstall) {
+  if (Test-Path -LiteralPath $linkedModule) {
+    Write-Warn2 "node_modules\$pluginName is still present; run pnpm install in the profile to prune it"
+  } else {
+    Write-Ok "module removed from node_modules\$pluginName"
+  }
+} elseif (Test-Path -LiteralPath $linkedModule) {
   Write-Ok "module present at node_modules\$pluginName"
 } else {
   Write-Warn2 "node_modules\$pluginName is missing; the profile will not find the plugin"
@@ -183,12 +198,15 @@ if (-not $Uninstall) {
   Write-Host '    - a tool named  git_commit_push   (prepare / apply / auto)' -ForegroundColor Gray
   Write-Host '    - a slash command  /commit-push   (runs without the model, 0 tokens)' -ForegroundColor Gray
   Write-Host ''
+  Write-Host '  The plugin is a declared bundle, so Settings > Plugins can now' -ForegroundColor Gray
+  Write-Host '  enable, disable and uninstall it without this script.' -ForegroundColor Gray
+  Write-Host ''
   Write-Host '  Settings live in:' -ForegroundColor Gray
   Write-Host "    $(Join-Path $pluginDir 'git-commit-push.config.json')" -ForegroundColor Gray
   Write-Host ''
   Write-Host '  If anything goes wrong, restore the backed-up profile files:' -ForegroundColor Gray
   Write-Host "    $(Join-Path $profileDir 'package.json.git-commit-plugin.bak')" -ForegroundColor Gray
-  Write-Host "    $(Join-Path $profileDir 'cordis.patch.yml.git-commit-plugin.bak')" -ForegroundColor Gray
+  Write-Host '    cordis.patch.yml.git-commit-plugin.bak  (only if the migration touched it)' -ForegroundColor Gray
   Write-Host ''
 } else {
   Write-Host ''

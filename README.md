@@ -1,8 +1,7 @@
 # dsh-plugin-git-commit-push
 
-一次工具调用完成「提交 + 推送」的 DSH 插件。它是 `.agents/skills/git-commit` 那个 Skill 的工具化替代：
+基于 git-commit-push Skill 设计，一次工具调用完成「提交 + 推送」的 DSH 插件， 0 Token 或 极少 Token �消耗。
 把原本需要模型跑十来条 shell、读一堆 git 原始输出的流程，压成 **1–2 次工具调用 + 一张紧凑卡片**。
-
 ```
 改动 → git_commit_push(prepare)          ← 一张卡片，不含 diff
      → 你写 Conventional Commits 信息
@@ -80,15 +79,30 @@ sh setup.sh desktop --uninstall
 
 需要 `git` 与 Node 20+（DSH 自带 node/pnpm，脚本会优先使用自带的）。
 
-### 两个脚本都会做三件事（幂等、带备份）
+### 用插件页安装 / 管理（推荐）
+
+本包在 `package.json` 里声明了 `dsh.bundle.patch`，也就是说它是 DSH 意义上的**组合包**（bundle）。于是 Settings → Plugins 可以直接管它：
+
+| 动作 | 插件页做什么 |
+|---|---|
+| **安装** | 安装框里填本地路径（如 `C:\Users\admin\.dsh\local-plugins\dsh-plugin-git-commit-push`）或包名 |
+| **启用 / 停用** | 只改 profile `package.json` 的 `dsh.profile.bundles`，依赖保留 |
+| **卸载** | 把包从 profile 依赖里移除 |
+
+**为什么之前不行**：没有 `dsh.bundle.patch` 的包在插件页会得到「**这个包没有声明组合包，不能作为插件管理**」（host 侧错误码 `not-bundle`）。管理器只把声明了组合包的包当作可管理的插件——启用/停用/卸载都作用在组合包层上，一个普通依赖没有可切换的层。
+
+**别两种方式一起用**：脚本会删掉自己以前写进 profile patch 的挂载行，插件页装完也不会有第二处挂载（Loader 的 `insert` 是追加语义，同一 id 插两次会挂载两次）。
+
+### 两个脚本都会做两件事（幂等、带备份）
 
 1. `package.json`：`dependencies` 加 `link:` 依赖、`dsh.profile.bundles` 加包名；
-2. `cordis.patch.yml`：写入带标记的 `insert` 挂载行（id = `git-commit-push`）；
-3. 在 profile 目录跑 `pnpm install` 建立链接。
+2. 在 profile 目录跑 `pnpm install` 建立链接。
 
-**为什么必须写挂载行**：这是**实测**结论。只把包装进 `dependencies` 与 `dsh.profile.bundles`、不写挂载行时，loader 里**完全没有该包的挂载条目**，插件根本不加载。因此本包**不声明** `dsh.bundle.patch`，挂载只有这一处，不存在重复挂载。
+挂载行**不在**脚本里：它由本包自己的组合包 patch [cordis.patch.yml](<./cordis.patch.yml>) 提供（`package.json` 的 `dsh.bundle.patch` 指向它），launcher 对每个选中该组合包的 profile 都应用它。脚本保留的第三个动作是**迁移**：老版本曾把同一行写进 profile 的 `cordis.patch.yml`，脚本发现那一段带标记的块就删掉它，避免重复挂载。
 
-**宿主代码改动必须重启 DSH**：`patchReload: live` 会重读配置与挂载行，但**不会重新 import ESM 模块**——实测：改完文件后 loader 条目已更新，而 Tool 注册表里仍是旧工具名。所以改代码后要重启；只改 `git-commit-push.config.json` 则下次调用即生效。
+**为什么必须声明组合包**：这是**实测**结论，但早期版本的因果搞反了。只把包装进 `dependencies` 与 `dsh.profile.bundles`、而包里**没有** `dsh.bundle.patch` 时，launcher 会抛 `profile bundle "…" declares no dsh.bundle in its package.json` 并**跳过该层**——所以 loader 里完全没有该包的挂载条目。缺的不是“组合包通道”，缺的是“这个包声明自己是组合包”。声明之后，选中它就会应用它自己的 patch，插件页也才认得它。
+
+**宿主代码改动必须重启 DSH**：`patchReload: live` 会重读配置、挂载行与各组合包层，但**不会重新 import ESM 模块**——实测：改完文件后 loader 条目已更新，而 Tool 注册表里仍是旧工具名。所以改代码后要重启；只改 `git-commit-push.config.json` 则下次调用即生效。切换组合包启用状态属于前者之外的 profile 写入，同样以重启最稳。
 
 ### 环境变量
 
@@ -160,13 +174,26 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不
 
 **明确不猜**：会话目录不是仓库时，返回其下的候选仓库让你用 `cwd` 指定，**不会**随便挑一个提交。git 未安装与「不是仓库」是两种不同失败，不会互相误报。
 
+## 附：DSH 组合包契约（本包踩过的三个点）
+
+下面三点是照着 `dsh` 打包产物里的实现核对过的（`packages/boot/plugin-manager`、`packages/boot/app-boot`、`packages/boot/package-manifest`），不是推测。
+
+1. **组合包 = `package.json` 里的 `dsh.bundle.patch`**：一个文件路径，或有序的文件路径数组，相对包目录。`dsh.profile.bundles` 里选中的名字，launcher 用 `bundlePatchFiles` / `bundlePatchPaths` 解析后把该 patch 当成一层应用；解析不出 `dsh.bundle` 就抛 `profile bundle "…" declares no dsh.bundle in its package.json` 并**跳过该层**（记进 `skippedBundles`），不会拖垮启动。
+2. **插件页只管理组合包**。`listBundles()` 会把「已选中却没有 `dsh.bundle`」的名字列成 `error.code = "not-bundle"`（页面文案就是那句「这个包没有声明组合包，不能作为插件管理」）；启用/停用只改 `dsh.profile.bundles` 的成员关系、保留依赖，卸载才动依赖。未选中的普通依赖干脆不列出来。
+3. **兼容性只查 `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-*` 类型的 peer**，用 `includePrerelease` 参与比较，运行版本取 `dsh-app-boot` 的版本。本包的 `@deepseek-ai/dsh-tools: ^0.2.0-rc.1` 对 0.2.0-rc.2 判定为兼容；`@deepseek-ai/cordis` 不在检查范围内（前缀不匹配）。
+
+顺带两条容易踩的：
+
+- Loader 的 `insert` 是**追加**语义、且不去重——同一个 `id` 插两次就是挂载两份，所以挂载点必须唯一。
+- 显示元数据（标题 / 说明 / 图标）由 `readPluginMeta` 通过 Node 解析 `<包名>/package.json` 与 `<包名>/locale/*.json` 得到，`locale/en.json` 是基准文件；因此 `exports` 要放行这两个子路径。
+
 ## 自检
 
 装之前先跑，不需要 DSH，也不碰你的仓库（测试在系统临时目录里建自己的仓库，用完删掉）：
 
 ```bash
 cd ~/.dsh/local-plugins/dsh-plugin-git-commit-push
-node self-test.mjs             # 纯逻辑：分类、信息生成、卡片、参数解析、schema 校验（42 项）
+node self-test.mjs             # 纯逻辑 + 打包契约：分类、信息生成、卡片、参数解析、schema、组合包声明（48 项）
 node self-test-git.mjs         # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交（20 项）
 node capture-git-format.mjs    # 只打印真实 git 的 -z 原始字节，用于诊断分帧问题
 ```
@@ -182,10 +209,15 @@ $n = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\b
 
 这条测试的由来值得记一笔：第一版 `lib/survey.js` 从一个**不导出该名字**的模块 import 了一个函数。ESM 链接期错误让整个插件图无法求值——`git_commit_push` 和 `/commit-push` 都不会注册。而当时的纯逻辑测试因为不 import `survey.js`，根本碰不到它。现在两个测试文件都显式 import 完整模块图，并且 `apply()` 在注册前会用 `toolDefinitionProblems()` 自检 schema。
 
+`self-test.mjs` 最后一节查的是**打包契约**而不是代码：`dsh.bundle.patch` 指向的文件存在且非空、该 patch 只插入**一行**挂载条目（两行就是挂两次）、这行的 `id` 是稳定的 `git-commit-push`、`name` 等于包名、两个安装脚本都不再自己写挂载行、以及插件页要读的 `exports` 子路径与 `locale/*.json` 齐备。它自带一个只认这份 patch 用到的语法的小型 YAML 读取器——本包刻意零依赖，测试不能为了读三行 YAML 引进一个 parser；读不懂的行会让测试**失败**而不是被忽略。
+
 ## 结构
 
 ```
 index.js                 插件入口：工具定义、/commit-push 命令、编排（prepare/apply/auto）
+cordis.patch.yml         组合包 patch：唯一一处挂载行（dsh.bundle.patch 指向它）
+locale/en.json           插件页显示文本（meta.title / meta.description，英文）
+locale/zh.json           同上，中文
 lib/git.js               唯一的 git 调用层：固定 argv、超时、输出上限、porcelain 解析、平台探测
 lib/analyze.js           改动分类 + 规则化 Conventional Commits 生成 + 卡片渲染
 lib/survey.js            一次仓库摸底：status / numstat / log / 有界 diff
@@ -193,7 +225,7 @@ lib/config.js            配置读取（JSON + 内置默认值）
 lib/profile-edit.mjs     两个安装脚本共用的 profile 清单编辑器（幂等、保留未知字段、无 BOM、自校验）
 setup.ps1                Windows 安装 / 卸载
 setup.sh                 macOS / Linux 安装 / 卸载
-self-test.mjs            纯逻辑自检（42 项）
+self-test.mjs            纯逻辑 + 打包契约自检（48 项）
 self-test-git.mjs        真实 git 集成自检（20 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（诊断分帧问题）
 e2e-check.mjs            直连调用 run()，用于不重启验证提交路径
@@ -203,3 +235,5 @@ e2e-check.mjs            直连调用 run()，用于不重启验证提交路径
 因为插件以 `link:` 形式挂在 profile 外，不依赖宿主把 `@deepseek-ai/*` 解析到本包，装载不会因为模块解析失败而挂掉。
 
 代价是必须手写**真正的 JSON Schema**：`parameters` 需要 `type: "object"` + `properties` + `required: []`，`output.schema` 的 `required` 必须是**字符串数组**（`defineTool` 的 per-property `required: true` 语法只由 `defineTool` 自己编译；手写定义直接送进注册表会被拒，且是在**注册时**抛错，整个插件都装不上）。`toolDefinitionProblems()` 就是这条规则的回归测试。
+
+`exports` 里除 `.` 之外还导出 `./package.json` 与 `./locale/*`：插件页读显示文本时走的是 Node 的模块解析（`readPluginMeta` 解析 `<specifier>/package.json` 与 `<specifier>/locale/en.json`），只有 `.` 的 exports 映射会让这两个查找得到 `ERR_PACKAGE_PATH_NOT_EXPORTED`，标题就退化成整串模块说明符。

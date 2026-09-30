@@ -1,0 +1,31 @@
+# The mount row this package contributes as a DSH profile bundle.
+#
+# WHY THIS FILE EXISTS
+# `package.json` declares `dsh.bundle.patch: cordis.patch.yml`. That single
+# declaration is what makes the package a *bundle* to DSH: the launcher reads
+# this patch when the package is listed in the profile's `dsh.profile.bundles`,
+# and the plugin manager lists and manages the package only when it finds a
+# bundle declaration. Without it the package is a plain dependency — and the
+# Plugins page refuses every action with "这个包没有声明组合包，不能作为插件管理"
+# (`not-bundle`).
+#
+# WHY THE ROW LIVES HERE, NOT IN THE PROFILE PATCH
+# An earlier revision wrote this same row into the profile's own
+# `cordis.patch.yml` and declared no bundle, on the theory that the bundle
+# channel was insufficient. The measurement behind that theory was right and its
+# conclusion was wrong: with the package in `dependencies` and in
+# `dsh.profile.bundles` but no `dsh.bundle.patch`, the launcher throws
+# "profile bundle X declares no dsh.bundle in its package.json" and skips the
+# layer, so nothing was mounted. Declaring the bundle is the fix; the row just
+# has to come from the bundle itself.
+#
+# Insert is append-only in the Loader's patch dialect (see the
+# `cordis-composition-reference` skill): two inserts of the same id mount the
+# plugin TWICE. The profile patch is therefore kept free of this row, and both
+# installers strip a legacy block if they find one.
+#
+# `id` is the Loader entry identity. The plugin manager's per-component switch
+# and any profile override address the row by it, so it must stay stable.
+- insert:
+    - id: git-commit-push
+      name: 'dsh-plugin-git-commit-push'

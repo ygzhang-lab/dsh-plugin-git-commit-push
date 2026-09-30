@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 #
 # Install dsh-plugin-git-commit-push into the active DSH profile on macOS or
-# Linux. The Windows equivalent is setup.ps1; both do the same three things and
+# Linux. The Windows equivalent is setup.ps1; both do the same two things and
 # both delegate the profile-manifest edit to lib/profile-edit.mjs, so the risky
 # step is the same reviewed code on every platform.
 #
 #   1. links the plugin into the profile's package.json as a `link:` dependency;
-#   2. appends the package to `dsh.profile.bundles`;
-#   3. writes the mount row into the profile's cordis.patch.yml.
+#   2. appends the package to `dsh.profile.bundles`.
 #
-# Step 3 is required, not cosmetic: measured on the reserved `desktop` profile,
-# a linked and bundled package with no mount row loads nothing at all. The
-# package therefore declares no `dsh.bundle.patch`, so this row is the single
-# mount and there is no double-mount to guard against.
+# The mount row is deliberately NOT written here. It comes from the package's own
+# bundle patch (cordis.patch.yml, declared as `dsh.bundle.patch`), which the
+# launcher applies for every profile that selects the bundle. That declaration is
+# also what makes the package manageable: without it the Plugins page answers
+# every request with "这个包没有声明组合包，不能作为插件管理" (`not-bundle`).
+#
+# What this script does add is the migration: an earlier revision wrote the mount
+# row into the profile's cordis.patch.yml instead, and Loader `insert` is
+# append-only — two inserts of one id mount the plugin twice — so that legacy
+# block is stripped whenever it is found.
 #
 # Restart DSH afterwards. `patchReload: live` re-reads the mount row but does
 # NOT re-import an ESM module, so code changes need a restart.
@@ -107,31 +112,35 @@ else
 fi
 ok 'package.json updated'
 
-# ------------------------------------------------------------ 3. mount row
+# ------------------------------------------------------- 3. legacy mount row
+# The mount row comes from this package's bundle patch (cordis.patch.yml), so
+# nothing is added to the profile patch here. What is removed is the row an
+# earlier revision of this script wrote: Loader `insert` is append-only, so
+# leaving it next to the bundle's own row would mount the plugin twice.
 begin_marker='# >>> dsh-plugin-git-commit-push'
 end_marker='# <<< dsh-plugin-git-commit-push'
 
 # Strip any previous block (POSIX awk, no GNU-only flags, no in-place sed: the
 # `-i` flag differs between BSD/macOS and GNU, which is exactly the kind of
-# portability trap this avoids).
+# portability trap this avoids). The file is only replaced when the block was
+# actually there, so a fresh install leaves cordis.patch.yml byte-identical.
 awk -v begin="$begin_marker" -v end="$end_marker" '
   $0 == begin { skipping = 1 }
   skipping != 1 { print }
   $0 == end { skipping = 0; next }
 ' "$patch_file" > "$patch_file.tmp"
-mv "$patch_file.tmp" "$patch_file"
 
-if [ "$uninstall" = 1 ]; then
-  ok 'cordis.patch.yml: mount row removed'
+if cmp -s "$patch_file" "$patch_file.tmp"; then
+  rm -f "$patch_file.tmp"
+  ok 'cordis.patch.yml: no legacy mount row to remove'
 else
-  {
-    printf '\n%s\n' "$begin_marker"
-    printf '%s\n' '- insert:'
-    printf '    - id: git-commit-push\n'
-    printf "      name: '%s'\n" "$plugin_name"
-    printf '%s\n' "$end_marker"
-  } >> "$patch_file"
-  ok 'cordis.patch.yml: mount row inserted'
+  backup="$patch_file.git-commit-plugin.bak"
+  if [ ! -f "$backup" ]; then
+    cp -p "$patch_file" "$backup"
+    ok "backed up $(basename "$patch_file") -> $(basename "$backup")"
+  fi
+  mv "$patch_file.tmp" "$patch_file"
+  ok 'cordis.patch.yml: legacy mount row removed (the bundle patch mounts the plugin now)'
 fi
 
 # ---------------------------------------------------------------- 4. link it
@@ -167,6 +176,8 @@ else
   printf '  After the restart you get:\n'
   printf '    - tool   git_commit_push   (prepare / apply / auto)  [costs model tokens]\n'
   printf '    - command /commit-push     (no model involved)      [0 model tokens]\n\n'
+  printf '  The plugin is a declared bundle, so Settings > Plugins can now enable,\n'
+  printf '  disable and uninstall it without this script.\n\n'
   printf '  Settings: %s\n' "$plugin_dir/git-commit-push.config.json"
   printf '  Backups : %s\n\n' "$manifest.git-commit-plugin.bak"
 fi

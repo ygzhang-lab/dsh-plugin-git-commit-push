@@ -6,6 +6,11 @@
  * The git parsers are fed byte-exact `-z` output captured from real git, so a
  * parser regression shows up here rather than as a wrong commit.
  *
+ * The last section checks the packaging contract instead of the code: the
+ * `dsh.bundle.patch` declaration, the mount row it points at, the display
+ * metadata the Plugins page reads, and the fact that neither installer writes a
+ * mount row of its own (two inserts of one id mount the plugin twice).
+ *
  * Run it with node (any platform):
  *
  *   node self-test.mjs
@@ -14,6 +19,9 @@
  *   & "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" self-test.mjs
  */
 import assert from 'node:assert/strict'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { git, parseStatusZ, tagNameError } from './lib/git.js'
 import { buildMessage, inferType, scopeOf, totalsOf, typeOfPath, declaredSymbols, removedDeclarationCount, renderCard } from './lib/analyze.js'
@@ -266,6 +274,113 @@ await checkAsync('git() surfaces a clean GitError when git cannot answer', async
     () => git(process.platform === 'win32' ? 'C:\\nonexistent-dsh-test-dir' : '/nonexistent-dsh-test-dir', ['rev-parse'], { timeoutMs: 5_000 }),
     (error) => error instanceof Error && error.name === 'GitError' && typeof error.code === 'string',
   )
+})
+
+console.log('\nbundle declaration (what the Plugins page reads)')
+
+/**
+ * The package directory, so these checks read the REAL manifest, patch and
+ * locale files instead of a copy of what the author believes they say.
+ */
+const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url))
+const manifest = JSON.parse(readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8'))
+const bundlePatch = manifest.dsh?.bundle?.patch
+
+/** Strip one layer of YAML quoting. */
+function unquote(value) {
+  const trimmed = value.trim()
+  if (/^'.*'$/.test(trimmed) || /^".*"$/.test(trimmed)) return trimmed.slice(1, -1)
+  return trimmed
+}
+
+/**
+ * The mount rows a bundle patch inserts.
+ *
+ * Deliberately a hand-written reader for exactly the dialect this patch uses:
+ * the plugin ships with NO dependencies (see README, "设计取舍"), so the test
+ * cannot reach for a YAML library without making one a runtime dependency. The
+ * reader is strict — an unknown line throws, and the check reports it — so a
+ * patch that grows a construct it does not understand fails loudly rather than
+ * being silently under-read.
+ */
+function insertRows(text) {
+  const rows = []
+  let current
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (line === '' || line.startsWith('#')) continue
+    if (line === '- insert:') { current = undefined; continue }
+    const id = /^-\s*id:\s*(.+)$/.exec(line)
+    if (id !== null) { current = { id: unquote(id[1]) }; rows.push(current); continue }
+    const name = /^name:\s*(.+)$/.exec(line)
+    if (name !== null) {
+      assert.notEqual(current, undefined, `"${line}" appears before any row id`)
+      current.name = unquote(name[1])
+      continue
+    }
+    throw new Error(`unrecognized line in the bundle patch: ${JSON.stringify(raw)}`)
+  }
+  return rows
+}
+
+check('package.json declares a bundle patch', () => {
+  // This one field is the difference between "a dependency" and "a bundle":
+  // the launcher applies the patch for every profile that selects the package,
+  // and the Plugins page refuses every action without it ("not-bundle").
+  assert.equal(bundlePatch, 'cordis.patch.yml')
+})
+
+check('the declared bundle patch exists and is not empty', () => {
+  const files = typeof bundlePatch === 'string' ? [bundlePatch] : bundlePatch
+  assert.equal(Array.isArray(files) && files.length > 0, true, 'dsh.bundle.patch must be a file or a list of files')
+  for (const file of files) {
+    assert.equal(typeof file, 'string')
+    const text = readFileSync(join(PACKAGE_DIR, file), 'utf8')
+    assert.equal(text.trim() === '', false, `${file} is empty`)
+  }
+})
+
+check('the bundle patch inserts exactly one mount row', () => {
+  const rows = insertRows(readFileSync(join(PACKAGE_DIR, bundlePatch), 'utf8'))
+  assert.equal(rows.length, 1, 'a second insert of the same id would mount the plugin twice')
+})
+
+check('the mount row names this package under a stable id', () => {
+  const [row] = insertRows(readFileSync(join(PACKAGE_DIR, bundlePatch), 'utf8'))
+  // The id is the Loader entry identity: the Plugins page's per-component
+  // switch and any profile override find the row by it, so it must not drift.
+  assert.equal(row.id, 'git-commit-push')
+  assert.equal(row.name, manifest.name)
+})
+
+check('neither installer writes a mount row of its own', () => {
+  for (const script of ['setup.ps1', 'setup.sh']) {
+    const text = readFileSync(join(PACKAGE_DIR, script), 'utf8')
+    assert.equal(
+      text.includes('- insert:'),
+      false,
+      `${script} writes a mount row; the bundle patch owns the only mount`,
+    )
+    assert.match(text, /legacy mount row/, `${script} must strip the legacy row an earlier revision wrote`)
+  }
+})
+
+check('the Plugins page can resolve the manifest and locale metadata', () => {
+  // readPluginMeta resolves `<specifier>/package.json` and `<specifier>/locale/*`
+  // through the package's own `exports` map: without these subpaths both lookups
+  // are ERR_PACKAGE_PATH_NOT_EXPORTED and the page falls back to the bare
+  // specifier as the title.
+  assert.equal(manifest.exports['./package.json'], './package.json')
+  assert.equal(manifest.exports['./locale/*'], './locale/*')
+  for (const language of ['en', 'zh']) {
+    const file = join(PACKAGE_DIR, 'locale', `${language}.json`)
+    assert.equal(existsSync(file), true, `locale/${language}.json is missing`)
+    const parsed = JSON.parse(readFileSync(file, 'utf8'))
+    for (const field of ['title', 'description']) {
+      const value = parsed.meta?.[field]
+      assert.equal(typeof value === 'string' && value.trim() !== '', true, `locale/${language}.json: meta.${field}`)
+    }
+  }
 })
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`)

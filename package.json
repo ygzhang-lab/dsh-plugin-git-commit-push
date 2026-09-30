@@ -1,12 +1,19 @@
 {
   "name": "dsh-plugin-git-commit-push",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "One-call Conventional-Commits git workflow for DSH: survey + commit + optional tag + push, plus a /commit-push slash command that runs with no model involvement. Windows and macOS/Linux.",
   "type": "module",
   "main": "index.js",
   "exports": {
-    ".": "./index.js"
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*": "./locale/*"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    }
   },
   "engines": {
     "node": ">=20",
@@ -23,6 +30,8 @@
   "files": [
     "index.js",
     "lib",
+    "cordis.patch.yml",
+    "locale",
     "git-commit-push.config.json",
     "setup.ps1",
     "setup.sh",

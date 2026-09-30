@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Git 提交与推送",
+    "description": "一次调用完成「提交 + 推送」：汇总改动、按 Conventional Commits 生成提交信息、必要时询问打标签，然后推送。另附不经过模型的 /commit-push 斜杠命令。"
+  }
+}
