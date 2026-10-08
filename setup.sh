@@ -88,7 +88,7 @@ else
     if [ -x "$candidate" ]; then node_bin=$candidate; break; fi
   done
 fi
-[ -n "$node_bin" ] || die 'no node executable found. Install Node 20+, or set DSH_HOME to your DSH home.'
+[ -n "$node_bin" ] || die 'no node executable found. Install Node 24+, or set DSH_HOME to your DSH home.'
 ok "node: $node_bin"
 
 pnpm_cli="$dsh_home/dsh-runtimes/dsh-primary-runtime/dependencies/pnpm/bin/pnpm.mjs"

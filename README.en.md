@@ -17,7 +17,7 @@ Installing gives you three surfaces:
 | Skill         | `git-commit-push`                                | the model, loading the full procedure on demand |
 
 - Platforms: **Windows and macOS / Linux** (see "Platforms")
-- Requirements: DSH `>=0.2.0-rc.1 <0.3.0`, Node `>=20`, git `>=2.36`
+- Requirements: DSH `>=0.2.0-rc.1 <0.3.0`, Node `>=24`, git `>=2.36`
 
 ## Install
 

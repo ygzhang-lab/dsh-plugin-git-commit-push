@@ -17,7 +17,7 @@ DSH（DeepSeek Harness）Git 提交推送插件，一次调用完成：汇总改
 | Skill    | `git-commit-push`                                 | 模型，按需加载的完整流程说明 |
 
 - 平台：**Windows 与 macOS / Linux 都可用**（见「跨平台」）
-- 要求：DSH `>=0.2.0-rc.1 <0.3.0`、Node `>=20`、git `>=2.36`
+- 要求：DSH `>=0.2.0-rc.1 <0.3.0`、Node `>=24`、git `>=2.36`
 
 ## 安装
 
