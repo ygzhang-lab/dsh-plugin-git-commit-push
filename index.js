@@ -27,10 +27,8 @@
  * the candidate repositories instead.
  */
 import {
-  loadSettingsReport, resolveSettings, uiOverrides,
-  CONFIG_PATH, userConfigPath, configCandidates,
+  loadSettingsReport, CONFIG_PATH, userConfigPath, configCandidates,
 } from './lib/config.js'
-import { CONFIG } from './lib/schema.js'
 import { skillDefinition } from './lib/skill.js'
 import { survey } from './lib/survey.js'
 import {
@@ -349,11 +347,15 @@ function prepareCard(surveyResult, settings) {
  * Exported because the card contract (which verdict for which outcome) is worth
  * testing directly: the push-failure branch cannot be produced cheaply against
  * a real remote.
+ *
+ * Shape, in order: verdict line, one counts-only summary line, the commit
+ * subject, the tag, the push outcome, and at most one note. It carries NO file
+ * list and NO raw git output — the user asked for a result card, not a process
+ * log, and the per-file notes are in the commit body where `git log` shows them.
  */
 export function applyCard(options) {
   const {
-    branch, hash, subject, tagCreated, pushed, pushedTag, note, fileCount, totals,
-    notes, autoPush, maxFiles = 12,
+    branch, hash, subject, tagCreated, pushed, pushedTag, note, surveyed, fileCount, totals, autoPush,
   } = options
   const lines = []
   const verdict = pushed
@@ -362,18 +364,19 @@ export function applyCard(options) {
       ? '⚠️ **已提交，但推送失败**'
       : '✅ **Git 提交成功（未推送）**'
   lines.push(`${verdict} · \`${branch}\` · \`${hash ?? '?'}\``)
+
+  // The one summary line a person reads: how many files were found changed, and
+  // how many of them this commit carried. Deliberately COUNTS, not a file list —
+  // the per-file notes live in the commit body, and a result card that opens
+  // with a process log is exactly the noise this card replaced.
+  const found = surveyed === undefined ? undefined : `检查到 ${surveyed} 个文件改动`
+  const landed = fileCount === undefined
+    ? undefined
+    : `本次提交 ${fileCount} 个文件（+${totals?.added ?? 0} / -${totals?.deleted ?? 0}）`
+  const summary = [found, landed].filter(part => part !== undefined).join('，')
+  if (summary !== '') lines.push(summary)
+
   lines.push(`信息：${subject}`)
-  if (fileCount !== undefined) lines.push(`提交 ${fileCount} 个文件 · +${totals?.added ?? 0} / -${totals?.deleted ?? 0}`)
-
-  // The per-file notes the commit body carries, so the card shows exactly what
-  // went into the repository. One file needs no list: the subject is the note.
-  const listed = (notes ?? []).slice(0, maxFiles)
-  if (listed.length > 1) {
-    for (const item of listed) lines.push(`  - ${item.note} · ${item.path}`)
-    const hidden = notes.length - listed.length
-    if (hidden > 0) lines.push(`  - …另有 ${hidden} 个文件`)
-  }
-
   lines.push(`标签：${tagCreated ?? '无'}`)
   lines.push(pushed
     ? `推送：已推送${pushedTag ? '（含标签）' : ''}`
@@ -401,10 +404,7 @@ export function applyCard(options) {
  * @returns {Promise<ReturnType<typeof valueOf>>}
  */
 export async function run(ctx, request, exec) {
-  const { settings: fileSettings, problem } = await loadSettingsReport()
-  // The row config — what DSH's own settings form wrote — outranks the JSON
-  // file; see lib/config.js for the precedence and lib/schema.js for the form.
-  const settings = resolveSettings({ ui: uiOverrides(ctx, PLUGIN_CONFIG), file: fileSettings })
+  const { settings, problem } = await loadSettingsReport()
   const result = await runWithSettings(ctx, request, exec, settings)
   if (problem === undefined) return result
   return {
@@ -482,13 +482,9 @@ async function runWithSettings(ctx, request, exec, settings) {
   const supplied = request.message !== undefined && request.message !== ''
   const generated = current.draft.message
   let message = supplied ? request.message : generated
-  let commitNotes = supplied ? undefined : current.draft.notes
   if (supplied && !request.message.includes('\n') && current.entries.length > 1) {
     const body = generated.split('\n').slice(1).join('\n').replace(/^\n+/u, '')
-    if (body !== '') {
-      message = `${request.message}\n\n${body}`
-      commitNotes = current.draft.notes
-    }
+    if (body !== '') message = `${request.message}\n\n${body}`
   }
 
   let committed
@@ -561,11 +557,10 @@ async function runWithSettings(ctx, request, exec, settings) {
       pushed: pushResult.pushed,
       pushedTag: pushResult.tagPushed,
       note: notes.length > 0 ? notes.join('；') : undefined,
+      surveyed: current.entries.length,
       fileCount: committed.files,
       totals: { added: committed.added ?? 0, deleted: committed.deleted ?? 0 },
-      notes: commitNotes,
       autoPush: effective.autoPush,
-      maxFiles: effective.maxFilesShown,
     }),
     root: current.root,
     branch: current.branch,
@@ -614,15 +609,20 @@ const TOOL_DEFINITION = {
     + 'NEVER call it on your own initiative: not because you or the user just finished editing files, not because a '
     + 'task looks complete, not because the session is ending, and not as a tidy-up step. Editing files is not a '
     + 'request to commit them. If it is unclear whether the user wants a commit, ask first. '
-    + 'action="prepare" returns a compact report of the pending changes — verdict line, file list with per-file line '
+    + 'action="auto" commits immediately using the rule-generated message — ONE call, no second turn. Prefer it when '
+    + 'the user simply wants the work committed and pushed and has no opinion about the wording; it is what the '
+    + '`/git-commit-push` slash command uses. '
+    + 'action="prepare" is the brief survey to use ONLY when the user wants to choose the message or review the '
+    + 'changeset first: verdict line, file list with per-file line '
     + 'counts, each file\'s own Conventional-Commits note, status counts, recent commit subjects for tone, and a '
     + 'rule-generated draft message — WITHOUT spending tokens on the diff itself. Read it, write your own '
     + 'Conventional-Commits subject, then call action="apply" with that subject as `message`. '
     + 'MULTI-FILE COMMITS GET ONE NOTE PER FILE: when several files changed, the commit body lists each file with its '
     + 'own typed note (`- fix(api): correct retry decision · src/api/retry.ts`), and the notes are generated per file '
     + 'even when you supply only a subject — supplying a message with a body of your own replaces them entirely. '
-    + 'action="auto" commits immediately using the rule-generated message (no extra model turn; use it when the user '
-    + 'asked you to just commit). '
+    + 'WHEN IT IS DONE, REPORT THE CARD, NOT THE PROCESS: the returned card opens with the verdict line and carries a '
+    + 'counts-only summary, and that card is the whole user-facing report. Do not narrate the steps you took, do not '
+    + 'restate the file list, and do not paste raw git output into the conversation. '
     + 'The plugin stages the working tree, commits, asks the user about a tag when a version bump, a possible '
     + 'breaking change or a large changeset warrants one (the question is answered in the UI and costs no tokens), '
     + 'and pushes, retrying once through `pull --rebase` if the remote moved. '
@@ -726,15 +726,6 @@ const TOOL_DEFINITION = {
  * resolution reaching this package's own imports).
  */
 let PLUGIN_CONTEXT
-
-/**
- * The config DSH parsed from our `Config` schema, captured in `apply`.
- *
- * Held rather than copied because a volatile field is a stable reference: the
- * settings form updates it in place, so reading it per call is what makes a
- * change apply without a remount.
- */
-let PLUGIN_CONFIG
 
 /** Parse the `/git-commit-push` command line into a request. */
 export function parseCommitCommand(rawInput) {
@@ -880,13 +871,9 @@ export function toolDefinitionProblems() {
  * Plugin entry point.
  *
  * @param {any} ctx host plugin context
- * @param {any} [config] the row config DSH parsed from our `Config` schema
  */
-export function apply(ctx, config) {
+export function apply(ctx) {
   PLUGIN_CONTEXT = ctx
-  // Kept rather than read once: the settings form writes volatile fields into
-  // these running references, so every call reads the current values.
-  PLUGIN_CONFIG = config
   // Fail loudly and specifically here rather than with an opaque registry error:
   // a malformed definition is an authoring bug the host reports once, at boot.
   const problems = toolDefinitionProblems()
@@ -900,9 +887,7 @@ export function apply(ctx, config) {
 
 /** Diagnostics: the settings files this plugin reads, and the self-check hooks. */
 export { CONFIG_PATH, userConfigPath, configCandidates, TOOL_DEFINITION }
-export { CONFIG as Config }
-export { FIELDS as CONFIG_FIELDS, resolveSettings, uiOverrides } from './lib/config.js'
-export { buildConfigSchema, loadSchemaLibrary } from './lib/schema.js'
+export { FIELDS as SETTINGS_FIELDS, IDENTITY_FIELDS } from './lib/config.js'
 export { skillDefinition, parseSkillFile, SKILL_NAME, SKILL_PATH, SKILL_SOURCE } from './lib/skill.js'
 export { survey } from './lib/survey.js'
 export { push, pushAfterRebase } from './lib/git.js'

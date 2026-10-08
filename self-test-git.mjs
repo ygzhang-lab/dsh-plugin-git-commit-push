@@ -360,8 +360,13 @@ await check('the commit card reports the real line counts', async () => {
 
     const result = await run({ get: () => undefined }, { action: 'apply', message: 'feat(a): 加两个常量', push: false, cwd: repo.dir }, undefined)
     assert.equal(result.ok, true, `apply failed: ${result.card}`)
-    assert.match(String(result.card), /提交 1 个文件 · \+2 \/ -0/, String(result.card))
+    assert.match(String(result.card), /本次提交 1 个文件（\+2 \/ -0）/, String(result.card))
     assert.match(String(result.card), /^✅ \*\*Git 提交成功（未推送）\*\*/)
+    // The card is a result card: counts and the verdict, never the per-file notes
+    // (those live in the commit body) and never raw git output.
+    assert.equal(/^\s+- /mu.test(String(result.card)), false, String(result.card))
+    // A one-file commit needs no body at all: the subject says everything.
+    assert.equal(repo.git(['log', '-1', '--pretty=format:%B']).trim(), 'feat(a): 加两个常量')
   } finally {
     repo.cleanup()
   }

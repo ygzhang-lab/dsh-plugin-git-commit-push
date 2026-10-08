@@ -20,9 +20,6 @@
     "node": ">=24",
     "dsh": ">=0.2.0-rc.1 <0.3.0"
   },
-  "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.4"
-  },
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": "^0.2.0-rc.1"
   },
@@ -77,6 +74,7 @@
     "capture-git-format.mjs",
     "e2e-check.mjs",
     "SKILL.md",
+    "AGENTS.md",
     "README.md",
     "README.en.md"
   ]

@@ -160,7 +160,32 @@ if ($existingBlock.Success) {
   Write-Ok 'cordis.patch.yml: no legacy mount row to remove'
 }
 
-# --- 4. Link the package ---------------------------------------------------
+# --- 4. Clear a stale node_modules entry ------------------------------------
+# WHY THIS STEP EXISTS (it is the fix for the ERR_PNPM_EPERM install failure):
+# pnpm imports a package by building a temporary directory next to the target
+# and RENAMING it onto `node_modules\<name>`. Windows cannot rename a directory
+# onto an existing, non-empty one, and the move fails with EPERM:
+#
+#   [ERR_PNPM_EPERM] [importPackage ...\node_modules\dsh-plugin-git-commit-push]
+#   EPERM: operation not permitted, rename '...<name>_tmp_1234_1' -> '...<name>'
+#
+# The usual cause is a leftover from an install this profile no longer manages —
+# classically a `link:` junction whose checkout has since been moved or deleted.
+# Removing the entry here prevents that: pnpm recreates it from the profile
+# manifest in the very next step.
+#
+# The removal itself lives in lib/profile-link.mjs, the same reviewed code
+# setup.sh runs: a link is UNLINKED and never followed, so the checkout it points
+# at keeps every file. See that file for the measurements behind this.
+$linkOutcome = & $nodeExe "$pluginDir\lib\profile-link.mjs" --profile-dir $profileDir --package $pluginName
+if ($LASTEXITCODE -ne 0) { throw "clearing a stale node_modules entry failed with exit code $LASTEXITCODE" }
+switch ($linkOutcome) {
+  'removed-link' { Write-Ok "removed a stale link at node_modules\$pluginName (its checkout is untouched)" }
+  'removed-directory' { Write-Ok "removed a stale directory at node_modules\$pluginName so pnpm can import it cleanly" }
+  default { Write-Ok "node_modules\${pluginName}: nothing stale to clear" }
+}
+
+# --- 5. Link the package ---------------------------------------------------
 Write-Step 'running pnpm install in the profile (this may take a moment)...'
 Push-Location $profileDir
 # pnpm writes progress and warnings to stderr routinely. With
@@ -179,9 +204,10 @@ try {
 if ($pnpmExit -ne 0) { throw "pnpm install failed with exit code $pnpmExit" }
 Write-Ok 'package linked into the profile'
 
-# --- 5. Verify -------------------------------------------------------------
-# On uninstall the linked directory is expected to be gone (pnpm pruned it in
-# step 4); reporting that as a warning would read like a failure.
+# --- 6. Verify -------------------------------------------------------------
+# On uninstall the linked directory is expected to be gone (cleared in step 4,
+# then pruned by pnpm in step 5); reporting that as a warning would read like a
+# failure.
 $linkedModule = Join-Path $profileDir "node_modules\$pluginName"
 if ($Uninstall) {
   if (Test-Path -LiteralPath $linkedModule) {
@@ -211,6 +237,13 @@ if (-not $Uninstall) {
   Write-Host ''
   Write-Host '  Settings live in:' -ForegroundColor Gray
   Write-Host "    $(Join-Path $pluginDir 'git-commit-push.config.json')" -ForegroundColor Gray
+  Write-Host '    (edit the JSON file; the plugin has no settings form)' -ForegroundColor Gray
+  Write-Host ''
+  Write-Host '  If the Plugins page reports ERR_PNPM_EPERM while installing this' -ForegroundColor Gray
+  Write-Host '  package, an earlier install left node_modules\dsh-plugin-git-commit-push' -ForegroundColor Gray
+  Write-Host '  behind (classically a link: junction whose checkout moved). This script' -ForegroundColor Gray
+  Write-Host '  now clears that entry automatically, so just run it again — or delete' -ForegroundColor Gray
+  Write-Host '  that directory yourself and retry the install.' -ForegroundColor Gray
   Write-Host ''
   Write-Host '  If anything goes wrong, restore the backed-up profile files:' -ForegroundColor Gray
   Write-Host "    $(Join-Path $profileDir 'package.json.git-commit-plugin.bak')" -ForegroundColor Gray

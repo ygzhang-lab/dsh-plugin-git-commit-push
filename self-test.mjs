@@ -20,7 +20,10 @@
  *   & "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" self-test.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync,
+  symlinkSync, writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -28,8 +31,8 @@ import { fileURLToPath } from 'node:url'
 import { git, parseStatusZ, tagNameError } from './lib/git.js'
 import { buildMessage, inferType, scopeOf, totalsOf, typeOfPath, declaredSymbols, removedDeclarationCount, renderCard } from './lib/analyze.js'
 import { normalizeEntries } from './lib/survey.js'
-import { loadSettingsReport, DEFAULTS, FIELDS as CONFIG_FIELDS, IDENTITY_FIELDS, resolveSettings, uiOverrides } from './lib/config.js'
-import { buildConfigSchema, loadSchemaLibrary, schemaBuildProblem, CONFIG } from './lib/schema.js'
+import { loadSettingsReport, DEFAULTS, FIELDS as SETTINGS_FIELDS, IDENTITY_FIELDS } from './lib/config.js'
+import { clearStaleEntry } from './lib/profile-link.mjs'
 import { parseSkillFile, skillDefinition, SKILL_NAME, SKILL_PATH } from './lib/skill.js'
 import { apply, applyCard, inject, COMMAND_NAME, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
 
@@ -285,7 +288,9 @@ check('the preview card leads with an unmissable verdict', () => {
     maxFiles: 12,
     hasUpstream: true,
   })
-  assert.match(card.split('\n')[0], /^🔎 \*\*改动预览（未提交）\*\*/)
+  // The first line is the brief in-run summary the user asked for: how many
+  // files were found changed, not a process log.
+  assert.match(card.split('\n')[0], /^🔎 \*\*检查到 \d+ 个文件改动（未提交）\*\* · `main` · \+\d+ \/ -\d+$/)
   // Each file line ends in the note that file would get in the commit body.
   assert.match(card, /src\/api\/retry\.ts.*→ feat\(api\): 更新 decideRetry/)
   assert.match(card, /docs\/guide\.md.*→ docs: 更新文档 guide/)
@@ -335,14 +340,10 @@ const commitCard = (extra) => applyCard({
   pushed: false,
   pushedTag: undefined,
   note: undefined,
+  surveyed: 2,
   fileCount: 2,
   totals: { added: 12, deleted: 4 },
-  notes: [
-    { path: 'src/api/retry.ts', note: 'feat(api): 更新 decideRetry' },
-    { path: 'docs/guide.md', note: 'docs: 更新文档 guide' },
-  ],
   autoPush: false,
-  maxFiles: 12,
   ...extra,
 })
 
@@ -365,16 +366,23 @@ check('a failed push is a warning, not a silent success', () => {
   assert.match(card, /说明：推送失败/)
 })
 
-check('the commit card lists the per-file notes it wrote', () => {
+check('the commit card carries counts, never a file list', () => {
+  // This is the contract the user asked for: a result card, not a process log.
+  // The per-file notes still exist — in the COMMIT BODY — and putting them back on
+  // the card would undo the request that removed them.
   const card = commitCard({ pushed: true, autoPush: true })
-  assert.match(card, /- feat\(api\): 更新 decideRetry · src\/api\/retry\.ts/)
-  assert.match(card, /- docs: 更新文档 guide · docs\/guide\.md/)
-  assert.match(card, /提交 2 个文件 · \+12 \/ -4/)
+  const lines = card.split('\n')
+  assert.equal(lines[1], '检查到 2 个文件改动，本次提交 2 个文件（+12 / -4）')
+  assert.match(card, /信息：feat\(api\): 更新 retry/)
+  assert.equal(/^\s+- /mu.test(card), false, 'the card must not list files')
+  assert.equal(card.includes(' · src/'), false, 'the card must not carry per-file notes')
+  assert.equal(/diff --git/u.test(card), false, 'the card must not carry git output')
+  assert.equal(lines.length <= 6, true, `the card must stay compact, got ${lines.length} lines`)
 })
 
-check('a one-file commit card has no redundant note list', () => {
-  const card = commitCard({ notes: [{ path: 'src/api/retry.ts', note: 'feat(api): 更新 decideRetry' }], fileCount: 1 })
-  assert.equal(card.includes('  - '), false)
+check('a one-file commit card still states the counts', () => {
+  const card = commitCard({ fileCount: 1, surveyed: 1, totals: { added: 3, deleted: 0 } })
+  assert.equal(card.split('\n')[1], '检查到 1 个文件改动，本次提交 1 个文件（+3 / -0）')
 })
 
 console.log('\nargument parsing (/git-commit-push)')
@@ -633,13 +641,28 @@ check('no DSH peer is ever installed by the consumer', () => {
   }
 })
 
-check('the schema library is a dependency, never a peer', () => {
-  // A profile sets `autoInstallPeers: false`, so a peer would never be
-  // installed: the settings form would silently disappear for every user.
-  const range = manifest.dependencies?.['@deepseek-ai/schemastery']
-  assert.equal(typeof range, 'string', '@deepseek-ai/schemastery must be a dependency')
-  assert.match(range, /^\^?\d+\.\d+\.\d+/)
+check('the visual settings form stays removed', () => {
+  // DSH renders a settings form only for a plugin that exports a Cordis `Config`
+  // schema, and this plugin deliberately has none: the form never appeared on
+  // the supported profiles, and a configuration surface that silently does
+  // nothing is worse than none. The JSON file is the only channel, so nothing
+  // may quietly reintroduce a second one.
+  assert.equal(manifest.dependencies?.['@deepseek-ai/schemastery'], undefined, 'the schema library must not come back as a dependency')
   assert.equal(manifest.peerDependencies?.['@deepseek-ai/schemastery'], undefined)
+  assert.equal(existsSync(join(PACKAGE_DIR, 'lib', 'schema.js')), false, 'lib/schema.js must stay deleted')
+  const entryText = readFileSync(join(PACKAGE_DIR, 'index.js'), 'utf8')
+  assert.equal(/CONFIG\s+as\s+Config/u.test(entryText), false, 'index.js must not export Config')
+  assert.equal(/\buiOverrides\b/u.test(entryText), false, 'the row-config layer must be gone from index.js')
+  assert.equal(/\bPLUGIN_CONFIG\b/u.test(entryText), false, 'the captured row config must be gone')
+  const configText = readFileSync(join(PACKAGE_DIR, 'lib', 'config.js'), 'utf8')
+  assert.equal(/export function uiOverrides/u.test(configText), false)
+  assert.equal(/export function resolveSettings/u.test(configText), false)
+  assert.equal(/export function loadFileSettingsSync/u.test(configText), false)
+  assert.equal(/readFileSync/u.test(configText), false, 'nothing needs a synchronous settings read any more')
+  // A user who reads the shipped template must not be sent looking for a form.
+  const template = readFileSync(join(PACKAGE_DIR, 'git-commit-push.config.json'), 'utf8')
+  assert.match(template, /ONLY configuration channel/u)
+  assert.equal(/settings form/u.test(template), false, 'the template must not advertise a form')
 })
 
 check('the icon satisfies the registry rules', () => {
@@ -822,88 +845,135 @@ check('apply survives a host with no command and no skill surface', () => {
   assert.equal(registered, 1)
 })
 
-console.log('\nthe settings form (Config schema)')
+console.log('\nthe settings file (the only configuration channel)')
 
 check('the field table matches the built-in defaults', () => {
-  // One table drives the schema, the merge and this test: a field added to one
-  // and forgotten in the other is how a form ends up writing values no code reads.
-  for (const field of CONFIG_FIELDS) {
+  // One table drives the loader, the shipped template and this test: a field
+  // added to one and forgotten in the other is how a user ends up editing a key
+  // no code reads.
+  for (const field of SETTINGS_FIELDS) {
     assert.equal(Object.hasOwn(DEFAULTS, field.key), true, `${field.key} is missing from DEFAULTS`)
     assert.equal(typeof DEFAULTS[field.key], field.kind, `${field.key} default type`)
-    assert.equal(typeof field.label === 'string' && field.label.trim() !== '', true, `${field.key} needs a form label`)
+    assert.equal(typeof field.label === 'string' && field.label.trim() !== '', true, `${field.key} needs a description`)
   }
   for (const field of IDENTITY_FIELDS) {
     assert.equal(Object.hasOwn(DEFAULTS.pinnedIdentity, field.key), true, `pinnedIdentity.${field.key}`)
-    assert.equal(typeof field.label === 'string' && field.label.trim() !== '', true, `pinnedIdentity.${field.key} needs a label`)
+    assert.equal(typeof field.label === 'string' && field.label.trim() !== '', true, `pinnedIdentity.${field.key} needs a description`)
   }
-  const listed = new Set(CONFIG_FIELDS.map(field => field.key))
+  const listed = new Set(SETTINGS_FIELDS.map(field => field.key))
   for (const key of Object.keys(DEFAULTS)) {
     if (key === 'pinnedIdentity') continue
-    assert.equal(listed.has(key), true, `${key} has a default but no form field`)
+    assert.equal(listed.has(key), true, `${key} has a default but no field-table entry`)
   }
 })
 
 check('the shipped template names every field', () => {
   const template = JSON.parse(readFileSync(join(PACKAGE_DIR, 'git-commit-push.config.json'), 'utf8'))
-  for (const field of CONFIG_FIELDS) assert.equal(Object.hasOwn(template, field.key), true, `template is missing ${field.key}`)
+  for (const field of SETTINGS_FIELDS) assert.equal(Object.hasOwn(template, field.key), true, `template is missing ${field.key}`)
   for (const field of IDENTITY_FIELDS) {
     assert.equal(Object.hasOwn(template.pinnedIdentity ?? {}, field.key), true, `template is missing pinnedIdentity.${field.key}`)
   }
 })
 
-check('the schema is published, or degrades without taking the plugin down', () => {
-  // @deepseek-ai/schemastery is a real dependency, but a `link:` install can
-  // only reach it through the launcher's runtime resolution. Either outcome is
-  // supported: a form, or no form with the tool still registered.
-  const library = loadSchemaLibrary()
-  if (library === undefined) {
-    assert.equal(CONFIG, undefined, 'without the library there must be no schema')
-    assert.equal(buildConfigSchema(undefined), undefined)
-    let registered = 0
-    apply({ tools: { register: () => { registered += 1 } }, inject: () => {}, logger: { warn: () => {} } })
-    assert.equal(registered, 1, 'the tool must still register')
-  } else {
-    assert.equal(typeof CONFIG, 'function', `the schema must be built when the library resolves (${schemaBuildProblem() ?? 'no recorded problem'})`)
-    assert.equal(typeof CONFIG.dict, 'object')
-    for (const field of CONFIG_FIELDS) {
-      assert.equal(CONFIG.dict[field.key]?.meta?.volatile, true, `${field.key} must be volatile to apply without a remount`)
+console.log('\nclearing a stale node_modules entry (the ERR_PNPM_EPERM fix)')
+
+/** A junction on Windows, a directory symlink elsewhere: what a `link:` install creates. */
+const createLink = (target, linkPath) => symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
+
+check('a rename onto an existing non-empty directory fails — the premise of the fix', () => {
+  // Measured on Windows/Node 24 and recorded here so the cleanup step can never be
+  // "simplified" away: pnpm imports a package by renaming `<dest>_tmp_<pid>_<n>`
+  // onto `<dest>`, and that rename cannot replace a directory that has content.
+  const root = mkdtempSync(join(tmpdir(), 'dsh-rename-'))
+  try {
+    const destination = join(root, 'pkg')
+    const stage = join(root, 'pkg_tmp_1_1')
+    mkdirSync(destination)
+    writeFileSync(join(destination, 'old.txt'), 'old\n')
+    mkdirSync(stage)
+    writeFileSync(join(stage, 'new.txt'), 'new\n')
+    let code
+    try {
+      renameSync(stage, destination)
+    } catch (error) {
+      code = error.code
     }
+    assert.notEqual(code, undefined, 'the rename unexpectedly succeeded; the premise of the fix no longer holds')
+    assert.equal(
+      ['EPERM', 'EACCES', 'ENOTEMPTY', 'EEXIST', 'ENOTDIR'].includes(code),
+      true,
+      `unexpected rename failure code ${String(code)}`,
+    )
+    // ...and the same rename succeeds once the destination is gone, which is
+    // exactly what the cleanup does before pnpm runs.
+    rmSync(destination, { recursive: true, force: true })
+    renameSync(stage, destination)
+    assert.equal(existsSync(join(destination, 'new.txt')), true)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })
 
-check('the row config outranks the settings file', () => {
-  const file = { ...DEFAULTS, autoPush: true, tagPrefix: 'file-', maxFilesShown: 7 }
-  const merged = resolveSettings({ ui: { autoPush: false, tagPrefix: 'ui-' }, file })
-  assert.equal(merged.autoPush, false, 'the form wins')
-  assert.equal(merged.tagPrefix, 'ui-', 'the form wins for the same field')
-  assert.equal(merged.maxFilesShown, 7, 'the file still supplies fields the form did not set')
+check('a stale link is unlinked and its checkout is left completely alone', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
+  try {
+    const checkout = join(root, 'checkout')
+    mkdirSync(checkout)
+    writeFileSync(join(checkout, 'keep.ts'), 'export const keep = 1\n')
+    const entry = join(root, 'node_modules', 'dsh-plugin-git-commit-push')
+    mkdirSync(join(root, 'node_modules'))
+    createLink(checkout, entry)
+
+    assert.equal(clearStaleEntry(root, 'dsh-plugin-git-commit-push'), 'removed-link')
+    assert.equal(existsSync(entry), false, 'the entry must be gone')
+    assert.equal(existsSync(join(checkout, 'keep.ts')), true, 'the checkout must be untouched')
+    assert.deepEqual(readdirSync(checkout), ['keep.ts'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
-check('pinnedIdentity merges per key, not wholesale', () => {
-  const file = { ...DEFAULTS, pinnedIdentity: { name: 'From File', email: 'file@example.com' } }
-  const merged = resolveSettings({ ui: { pinnedIdentity: { name: 'From Form' } }, file })
-  assert.equal(merged.pinnedIdentity.name, 'From Form')
-  assert.equal(merged.pinnedIdentity.email, 'file@example.com', 'an untouched identity key must survive')
+check('a stale directory and an absent entry are both handled', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
+  try {
+    const entry = join(root, 'node_modules', 'dsh-plugin-git-commit-push')
+    mkdirSync(entry, { recursive: true })
+    writeFileSync(join(entry, 'leftover.js'), 'x\n')
+    assert.equal(clearStaleEntry(root, 'dsh-plugin-git-commit-push'), 'removed-directory')
+    assert.equal(existsSync(entry), false)
+    assert.equal(clearStaleEntry(root, 'dsh-plugin-git-commit-push'), 'absent')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
-check('the raw row config is read as the UI layer', () => {
-  const ctx = { fiber: { entry: { options: { config: { autoPush: false, tagPrefix: 'form-' } } } } }
-  assert.deepEqual(uiOverrides(ctx, undefined), { autoPush: false, tagPrefix: 'form-' })
+check('the cleanup refuses a target outside the profile node_modules', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
+  try {
+    assert.throws(() => clearStaleEntry(root, '../../evil'), /single path segment/u)
+    assert.throws(() => clearStaleEntry(root, '..\\..\\evil'), /single path segment/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
-check('without the raw config, only values that differ from the defaults count', () => {
-  // A parsed config always carries defaults; treating those as "the user chose
-  // them" would make the form silently beat the settings file.
-  const parsed = { autoPush: false, autoAdd: DEFAULTS.autoAdd, pinnedIdentity: { name: '', email: 'me@example.com' } }
-  assert.deepEqual(uiOverrides({ get: () => undefined }, parsed), {
-    autoPush: false,
-    pinnedIdentity: { email: 'me@example.com' },
-  })
-})
-
-check('no context and no config means no UI layer at all', () => {
-  assert.deepEqual(uiOverrides({ get: () => undefined }, undefined), {})
-  assert.deepEqual(uiOverrides(undefined, undefined), {})
+check('both installers run the shared cleanup instead of their own copy', () => {
+  // Two hand-written implementations of "delete this directory" drift apart, and
+  // this is the step that must never delete a user's checkout.
+  for (const script of ['setup.ps1', 'setup.sh']) {
+    const text = readFileSync(join(PACKAGE_DIR, script), 'utf8')
+    assert.match(text, /profile-link\.mjs/u, `${script} must call lib/profile-link.mjs`)
+  }
+  assert.equal(
+    /Remove-Item -LiteralPath \$linkedModule -Recurse/u.test(readFileSync(join(PACKAGE_DIR, 'setup.ps1'), 'utf8')),
+    false,
+    'setup.ps1 must not delete the entry itself',
+  )
+  assert.equal(
+    /rm -rf "\$profile_dir\/node_modules\/\$plugin_name"/u.test(readFileSync(join(PACKAGE_DIR, 'setup.sh'), 'utf8')),
+    false,
+    'setup.sh must not delete the entry itself',
+  )
 })
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`)

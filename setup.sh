@@ -24,6 +24,12 @@
 # append-only — two inserts of one id mount the plugin twice — so that legacy
 # block is stripped whenever it is found.
 #
+# It also clears a stale `node_modules/<name>` entry in the profile before
+# linking, and removes one left behind on uninstall. pnpm imports a package by
+# renaming a temporary directory onto that path, which fails with ERR_PNPM_EPERM
+# when an earlier install — classically a `link:` whose checkout was moved or
+# deleted — left something there.
+#
 # Restart DSH afterwards. `patchReload: live` re-reads the mount row but does
 # NOT re-import an ESM module, so code changes need a restart.
 #
@@ -46,7 +52,9 @@ for arg in "$@"; do
   case "$arg" in
     --uninstall|-u) uninstall=1 ;;
     --help|-h)
-      sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'
+      # Print every leading comment line up to `set -eu`, so editing the header
+      # can never desynchronize a hard-coded line range.
+      awk 'NR > 1 { if ($0 ~ /^set -eu/) exit; sub(/^# ?/, ""); print }' "$0"
       exit 0
       ;;
     -*) printf 'unknown option: %s\n' "$arg" >&2; exit 2 ;;
@@ -148,7 +156,28 @@ else
   ok 'cordis.patch.yml: legacy mount row removed (the bundle patch mounts the plugin now)'
 fi
 
-# ---------------------------------------------------------------- 4. link it
+# ------------------------------------- 4. clear a stale node_modules entry
+# WHY THIS STEP EXISTS (it is the fix for the ERR_PNPM_EPERM install failure):
+# pnpm imports a package by building a temporary directory next to the target and
+# renaming it onto `node_modules/<name>`. A rename cannot replace an existing,
+# non-empty directory, so it fails with:
+#
+#   [ERR_PNPM_EPERM] [importPackage .../node_modules/dsh-plugin-git-commit-push]
+#   EPERM: operation not permitted, rename '...<name>_tmp_1234_1' -> '...<name>'
+#
+# The usual cause is a leftover from an install this profile no longer manages —
+# classically a `link:` symlink whose checkout has since been moved or deleted.
+# The removal lives in lib/profile-link.mjs, the same reviewed code setup.ps1
+# runs: a link is unlinked and never followed, so its checkout is untouched.
+link_outcome=$("$node_bin" "$plugin_dir/lib/profile-link.mjs" --profile-dir "$profile_dir" --package "$plugin_name") \
+  || die 'clearing a stale node_modules entry failed'
+case "$link_outcome" in
+  removed-link) ok "removed a stale link at node_modules/$plugin_name (its checkout is untouched)" ;;
+  removed-directory) ok "removed a stale directory at node_modules/$plugin_name so pnpm can import it cleanly" ;;
+  *) ok "node_modules/$plugin_name: nothing stale to clear" ;;
+esac
+
+# ---------------------------------------------------------------- 5. link it
 if [ "$uninstall" = 1 ]; then
   info 'skipping pnpm install (removal)'
 else
@@ -184,7 +213,13 @@ else
   printf '  The plugin is a declared bundle, so Settings > Plugins can now enable,\n'
   printf '  disable and uninstall it without this script.\n\n'
   printf '  Settings: %s\n' "$plugin_dir/git-commit-push.config.json"
+  printf '            (edit the JSON file; the plugin has no settings form)\n'
   printf '  Backups : %s\n\n' "$manifest.git-commit-plugin.bak"
+  printf '  If the Plugins page reports ERR_PNPM_EPERM while installing this\n'
+  printf '  package, an earlier install left node_modules/%s behind\n' "$plugin_name"
+  printf '  (classically a link: whose checkout moved). This script now clears that\n'
+  printf '  entry automatically, so just run it again — or delete that directory\n'
+  printf '  yourself and retry the install.\n\n'
 fi
 
 exit 0
