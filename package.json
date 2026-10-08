@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-git-commit-push",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "One-call Conventional-Commits git workflow for DeepSeek Harness: survey + commit + optional tag + push, plus a /git-commit-push slash command that runs with no model involvement. Windows and macOS/Linux.",
   "type": "module",
   "main": "index.js",
