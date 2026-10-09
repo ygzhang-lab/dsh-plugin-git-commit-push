@@ -226,13 +226,23 @@ async function doCommit(ctx, exec, options) {
 }
 
 /**
- * Create the tag and push branch + tag.
+ * Create the tag, then push the branch and the tag.
  *
  * The branch push and the tag push are separate commands so a tag rejection
  * (the common "tag already exists on the remote" case) leaves a successful
  * branch push fully verified instead of reported as an ambiguous single failure.
  *
- * @returns {Promise<{ pushed: boolean, tagCreated?: string, tagPushed?: boolean, note?: string, reason?: string }>}
+ * A tag that already exists LOCALLY is still published. Skipping it outright was
+ * a real bug: a tag whose push failed earlier (a dropped connection leaves exactly
+ * that state, and so does a `--no-push` run or a tag made by hand) stayed local
+ * forever, because every later run saw "already exists" and reported "已跳过"
+ * while the remote never got it. Creating is skipped for an existing tag;
+ * publishing it is not. `git push refs/tags/<tag>` is idempotent — a tag the
+ * remote already has at the same commit is a no-op, and a tag the remote holds at
+ * a DIFFERENT commit is rejected rather than moved, so this can never rewrite a
+ * published tag.
+ *
+ * @returns {Promise<{ pushed: boolean, tag?: string, tagCreated?: string, tagPushed?: boolean, note?: string, reason?: string }>}
  */
 async function doTagAndPush(ctx, exec, options) {
   const { settings, root, branch, tag, upstream } = options
@@ -241,24 +251,34 @@ async function doTagAndPush(ctx, exec, options) {
   const notes = []
   const note = text => { notes.push(text) }
 
+  /** The tag this run is responsible for getting onto the remote, if any. */
+  let publish
+
   if (tag !== undefined) {
     const invalid = await tagNameError(root, tag)
     if (invalid !== undefined) {
       note(`标签名无效（${invalid}），已跳过打标签`)
     } else if (await tagExists(root, tag)) {
-      note(`标签 ${tag} 已存在，已跳过`)
+      publish = tag
+      note(`标签 ${tag} 本地已存在，本次只推送它`)
     } else {
       try {
         await createTag(root, tag)
         result.tagCreated = tag
+        publish = tag
       } catch (error) {
         note(`创建标签失败：${brief(error)}`)
       }
     }
   }
 
+  // The card reports the tag that is in play, not only one created seconds ago:
+  // "标签：无" next to a locally created tag is what made this look like it worked.
+  if (publish !== undefined) result.tag = publish
+
   if (settings.autoPush !== true) {
     note('autoPush 已关闭，未推送')
+    if (publish !== undefined) note(`标签 ${publish} 仅本地（未推送）`)
     result.note = notes.join('；')
     return result
   }
@@ -267,13 +287,13 @@ async function doTagAndPush(ctx, exec, options) {
   if (pushed.ok) {
     result.pushed = true
     if (pushed.rebased) note('远程有新提交，已 rebase 后重推')
-    if (result.tagCreated !== undefined) {
+    if (publish !== undefined) {
       // The tag is a second command so its failure cannot be confused with the
       // branch push. A rejected tag push does NOT undo a successful push and is
       // reported as a note, not as a failed commit.
-      const tagPush = await push(root, branch, { hasUpstream: true, tag: result.tagCreated })
+      const tagPush = await push(root, branch, { hasUpstream: true, tag: publish })
       result.tagPushed = tagPush.ok
-      if (!tagPush.ok) note(`分支已推送，但标签 ${result.tagCreated} 推送失败（${tagPush.reason ?? '未知原因'}）`)
+      if (!tagPush.ok) note(`分支已推送，但标签 ${publish} 推送失败（${tagPush.reason ?? '未知原因'}）`)
     }
     result.note = notes.length > 0 ? notes.join('；') : undefined
     return result
@@ -283,6 +303,9 @@ async function doTagAndPush(ctx, exec, options) {
   note(pushed.reason === 'rebase-conflict'
     ? '推送被拒且 rebase 出现冲突，已中止 rebase 并保留你的改动，需手动处理'
     : `推送失败（${pushed.reason ?? '未知原因'}）`)
+  // A tag that never reached the remote stays local: say so, or the next run's
+  // "已存在，已跳过" reads like success.
+  if (publish !== undefined) note(`标签 ${publish} 仅本地（未推送）`)
   result.note = notes.join('；')
   return result
 }
@@ -310,6 +333,7 @@ function valueOf(fields) {
     ...(fields.draft === undefined ? {} : { draft: fields.draft }),
     ...(fields.tag === undefined ? {} : { tag: fields.tag }),
     ...(fields.tagCreated === undefined ? {} : { tagCreated: fields.tagCreated }),
+    ...(fields.tagPushed === undefined ? {} : { tagPushed: fields.tagPushed }),
     pushed: fields.pushed === true,
     ...(fields.note === undefined ? {} : { note: fields.note }),
     ...(fields.error === undefined ? {} : { error: fields.error }),
@@ -355,7 +379,7 @@ function prepareCard(surveyResult, settings) {
  */
 export function applyCard(options) {
   const {
-    branch, hash, subject, tagCreated, pushed, pushedTag, note, surveyed, fileCount, totals, autoPush,
+    branch, hash, subject, tag, tagCreated, pushed, pushedTag, note, surveyed, fileCount, totals, autoPush,
   } = options
   const lines = []
   const verdict = pushed
@@ -377,7 +401,10 @@ export function applyCard(options) {
   if (summary !== '') lines.push(summary)
 
   lines.push(`信息：${subject}`)
-  lines.push(`标签：${tagCreated ?? '无'}`)
+  // The tag that is actually in play: created by this run, or already local and
+  // published by it. `tagCreated` alone printed "标签：无" for the second case,
+  // which is exactly how "the tag only exists locally" went unnoticed.
+  lines.push(`标签：${tag ?? tagCreated ?? '无'}`)
   lines.push(pushed
     ? `推送：已推送${pushedTag ? '（含标签）' : ''}`
     : autoPush === true ? '推送：失败（见下方说明）' : '推送：未推送')
@@ -553,6 +580,7 @@ async function runWithSettings(ctx, request, exec, settings) {
       branch: current.branch,
       hash: committed.hash,
       subject: committed.subject ?? message,
+      tag: pushResult.tag,
       tagCreated: pushResult.tagCreated,
       pushed: pushResult.pushed,
       pushedTag: pushResult.tagPushed,
@@ -568,6 +596,7 @@ async function runWithSettings(ctx, request, exec, settings) {
     hash: committed.hash,
     tag: pushResult.tagCreated ?? tagResult.decided,
     tagCreated: pushResult.tagCreated,
+    tagPushed: pushResult.tagPushed,
     pushed: pushResult.pushed,
     note: notes.length > 0 ? notes.join('；') : undefined,
     error: pushFailed ? pushResult.reason ?? 'push-failed' : undefined,
@@ -693,6 +722,7 @@ const TOOL_DEFINITION = {
         draft: { type: 'string', description: 'prepare only: the rule-generated Conventional Commits message.' },
         tag: { type: 'string', description: 'Tag that was created, or the one that was suggested.' },
         tagCreated: { type: 'string', description: 'Tag actually created locally, when one was.' },
+        tagPushed: { type: 'boolean', description: 'Whether the tag (created now or already local) reached the remote. A tag can exist locally and never be published, so this is the field that answers "is the release tag out there?".' },
         pushed: { type: 'boolean', description: 'Whether the branch reached the remote.' },
         note: { type: 'string', description: 'Anything the caller must know: a rebase recovery, a skipped tag, a hook rejection.' },
         error: { type: 'string', description: 'Machine-branchable failure code when something the caller asked for did not happen.' },

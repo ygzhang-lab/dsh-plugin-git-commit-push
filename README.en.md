@@ -350,12 +350,28 @@ destructive verb means changing that file first.
 **Handled automatically**: `push -u origin <branch>` when there is no upstream; a rejected push
 (the remote moved) retries once after `pull --rebase`; on a rebase conflict it aborts **only the rebase it
 started itself** (probing `rebase-merge`/`rebase-apply` first, so your own rebase progress is never
-discarded) and reports honestly; an existing or invalid tag name is skipped with an explanation.
+discarded) and reports honestly; an invalid tag name is skipped with an explanation.
 
 **Tagging is conservative**: a tag is created only with your explicit consent (or `askBeforeTag: false`).
 An explicitly passed `tag` argument is treated as an instruction and skips the question. No answerer
 available, you are not present (a delegated call), or the wait timed out — all mean **do not tag**, and the
 card tells you how to add it later with the `tag` argument.
+
+**A tag has to actually reach the remote**: after a successful branch push the plugin runs a **separate tag
+push** (its own command, so a rejected tag is never confused with a rejected branch). Two cases that used to
+leave the tag local-only are now covered:
+
+- **a tag that already exists locally is still published** — what is skipped is the *creation*, not the
+  *publication* (both used to be skipped, so a tag left behind by an earlier failed push stayed local forever
+  while the card said "skipped", which reads like success);
+- a refspec-only push must name the remote: `git push refs/tags/v1` makes git read the refspec as the
+  **remote** and fail outright (`does not appear to be a git repository`), so that path resolves the branch's
+  real remote through `%(push:remotename)`.
+
+The card's `标签：` shows the tag actually in play (freshly created or already local — the note says which), and
+`推送：已推送（含标签）` appears only when the tag **really did reach the remote**. With `autoPush` off, or when
+the push fails, it says so explicitly («标签 X 仅本地（未推送）»). The tool's `tagPushed` value is exactly that
+boolean: did the tag get out?
 
 **It does not guess**: when the session directory is not a repository it reports the candidate repositories
 for you to pick with `cwd` instead of committing in one of them, and "git is not installed" is a different
@@ -389,7 +405,7 @@ directory and delete them):
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
 node self-test.mjs              # pure logic + packaging/config/skill contracts (90 checks)
-node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit, per-file notes, card verdicts (24 checks)
+node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit, per-file notes, card verdicts (28 checks)
 node capture-git-format.mjs     # prints raw git -z bytes, for diagnosing framing
 ```
 

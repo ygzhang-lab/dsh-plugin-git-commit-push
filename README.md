@@ -319,9 +319,16 @@ DSH 启动加载插件时，如果这个文件还不存在，插件就用包内�
 **绝不**：修改 `.gitignore`、改 git config（含 `user.name`/`user.email` 的写入）、`push --force`、`reset --hard`、`git clean`、`checkout -- <path>`、`commit --no-verify`。
 [lib/git.js](./lib/git.js) 是唯一与 git 对话的地方，动词表是固定的——想加破坏性命令，得先改那里。
 
-**自动处理**：无 upstream 时 `push -u origin <当前分支>`；推送被拒（远程有新提交）时 `pull --rebase` 后重推一次；rebase 冲突则**只 abort 本次自己启动的 rebase**（先探测 `rebase-merge`/`rebase-apply`，绝不丢弃你原有的 rebase 进度）并如实报告；tag 已存在或名字非法则跳过并说明。
+**自动处理**：无 upstream 时 `push -u origin <当前分支>`；推送被拒（远程有新提交）时 `pull --rebase` 后重推一次；rebase 冲突则**只 abort 本次自己启动的 rebase**（先探测 `rebase-merge`/`rebase-apply`，绝不丢弃你原有的 rebase 进度）并如实报告；tag 名字非法则跳过并说明。
 
 **打标签从严**：只有你明确同意（或 `askBeforeTag: false`）才会打标签。但**显式传入 `tag` 参数视为指令，直接执行**——不再经过提问（此前这里有个 bug：显式 tag 也会走提问，没有可用提问者时被静默丢弃，实测抓到并修复）。提问服务不可用、你不在现场（子代理调用）、等待超时——一律**不打**，并在卡片里告诉你怎么用 `tag` 参数补打。
+
+**标签必须真的上到远端**：分支推送成功后，插件会**再单独执行一次标签推送**（单独一条命令，这样标签被拒不会和分支被拒混在一起）。两种此前会「标签只在本地」的情况现在都覆盖了：
+
+- **本地已存在的标签照样会被推送**——跳过的是「创建」，不是「发布」（曾经两者一起跳过，于是上一次推送失败留下的标签永远留在本地，卡片还显示「已跳过」，看起来像成功了）；
+- 只推标签时必须显式给 remote：`git push refs/tags/v1` 会让 git 把 refspec 当成 remote 名而**直接致命失败**（`does not appear to be a git repository`），所以这条路径用 `%(push:remotename)` 解析出该分支真正的 remote。
+
+卡片里的 `标签：` 显示**本次真正在处理的标签**（不区分是刚创建还是本地已有，说明里会讲清），`推送：已推送（含标签）` 只在这条标签**确实到了远端**时才出现；`autoPush` 关闭或推送失败时会明确写「标签 X 仅本地（未推送）」。工具返回值里的 `tagPushed` 就是「标签到底上没上远端」这个布尔量。
 
 **明确不猜**：会话目录不是仓库时，返回其下的候选仓库让你用 `cwd` 指定，**不会**随便挑一个提交。git 未安装与「不是仓库」是两种不同失败，不会互相误报。
 
@@ -347,7 +354,7 @@ DSH 启动加载插件时，如果这个文件还不存在，插件就用包内�
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
 node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（90 项）
-node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交、逐文件注释、卡片结论（24 项）
+node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交、逐文件注释、卡片结论（28 项）
 node capture-git-format.mjs     # 只打印真实 git 的 -z 原始字节，用于诊断分帧问题
 ```
 
@@ -392,7 +399,7 @@ lib/profile-link.mjs     两个安装脚本共用的 node_modules 陈旧条目�
 setup.ps1                Windows 安装 / 卸载（方式 C）
 setup.sh                 macOS / Linux 安装 / 卸载（方式 C）
 self-test.mjs            纯逻辑 + 打包 / 配置契约自检（90 项）
-self-test-git.mjs        真实 git 集成自检（24 项，自建临时仓库）
+self-test-git.mjs        真实 git 集成自检（28 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（诊断分帧问题）
 e2e-check.mjs            直连调用 run()，用于不重启验证提交路径
 ```

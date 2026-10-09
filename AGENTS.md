@@ -5,7 +5,7 @@
 
 - 语言：面向用户的文档/卡片/提交信息默认**中文**（`defaultLanguage: "zh"` 可切 `en`）；代码注释与标识符英文。
 - 包名：`dsh-plugin-git-commit-push`；工具名 `git_commit_push`；斜杠命令 `git-commit-push`；skill 名 `git-commit-push`（**四处同名**，不要引入第二套名字）。
-- 当前版本 `1.0.3`（npm 上已有 `1.0.1`、`1.0.2`）。零运行时依赖。
+- 当前版本 `1.0.4`（npm 上已发布 `1.0.1`、`1.0.2`、`1.0.3`）。零运行时依赖。
 
 ---
 
@@ -38,7 +38,7 @@ lib/profile-edit.mjs     setup.ps1 / setup.sh 共用的 profile 清单编辑器�
 lib/profile-link.mjs     setup.ps1 / setup.sh 共用的「清掉 node_modules 里的残留项」（见 §5）
 setup.ps1 / setup.sh     Windows / macOS·Linux 的源码（link:）安装与卸载
 self-test.mjs            纯逻辑 + 打包/配置/skill 契约自检（90 项，不需要 DSH、不碰你的仓库）
-self-test-git.mjs        真实 git 集成自检（24 项，自建临时仓库）
+self-test-git.mjs        真实 git 集成自检（28 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（分帧问题诊断）
 e2e-check.mjs            直接调 run()，用于不重启验证提交路径
 ```
@@ -50,7 +50,7 @@ e2e-check.mjs            直接调 run()，用于不重启验证提交路径
 ```powershell
 $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
 & $node self-test.mjs        # 纯逻辑 + 打包契约，必须 90 passed / 0 failed
-& $node self-test-git.mjs    # 真实 git，必须 24 passed / 0 failed
+& $node self-test-git.mjs    # 真实 git，必须 28 passed / 0 failed
 ```
 
 两个测试都显式 import 完整模块图（曾有一个「import 了不存在的导出」导致整个插件图无法求值、工具与命令都不注册的真实事故）。改任何模块后先跑它们。
@@ -64,6 +64,7 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 3. `prepare` 分支：只回 `renderCard()` 的预览卡片，不动仓库。
 4. `apply`/`auto`：`doCommit()` → `stageAll`（autoAdd）→ `numstat`（**必须 await，否则 +0/-0**，这是修过的真实 bug）→ `commit()`；再 `tagDecision()` + `askTag()`（内置提问卡片，不花 token）→ `doTagAndPush()` → `applyCard()`。
 5. 显式 `tag` 参数视为指令，跳过提问直接打；提问服务不可用/子代理调用/超时 → **一律不打**并在卡片说明。
+6. 标签发布：分支推成功后，用**单独一条命令**推标签（`git push <remote> refs/tags/<tag>`），这样标签被拒不会与分支被拒混在一起。**本地已存在的标签也要推送**——跳过的是「创建」，不是「发布」（曾经两者一起跳过，标签就永远留在本地）。卡片的 `标签：` 显示本次真正在处理的标签；输出 schema 里的 `tagPushed` 回答「标签到底上没上远端」；`autoPush` 关闭或推送失败时会明确写「标签 X 仅本地（未推送）」。
 
 卡片契约（**用户明确要求过，不要退回旧形态**）：
 
@@ -113,7 +114,8 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 ## 7. 不要破坏的约束
 
 - **触发策略**（§1）：工具描述 / `SKILL.md` / 命令描述三处同时维护。
-- **git 只走 `lib/git.js`**，动词表固定；**绝不**改 `.gitignore`、改 git config、`push --force`、`reset --hard`、`git clean`、`checkout -- <path>`、`commit --no-verify`。推送被拒 → `pull --rebase` 重推一次；rebase 冲突 → 只 abort 自己启动的 rebase。
+- **只推标签时必须显式给 remote**：`git push refs/tags/v1` 会让 git 把 refspec 当成 remote 名而直接致命失败（`does not appear to be a git repository`），标签于是永远留在本地。`lib/git.js` 的 `push()` 因此在「只推标签」时用 `pushRemoteFor()`（`%(push:remotename)`）解析 remote —— 别删那段解析，`self-test-git.mjs` 里四条标签发布用例守着它。
+- **git 只走 lib/git.js**，动词表固定；**绝不**改 `.gitignore`、改 git config、`push --force`、`reset --hard`、`git clean`、`checkout -- <path>`、`commit --no-verify`。推送被拒 → `pull --rebase` 重推一次；rebase 冲突 → 只 abort 自己启动的 rebase。
 - **卡片形态**（§4）：结果卡片保持「结论 + 一行数量汇总」，不要再塞逐文件列表。
 - **零依赖**：除可选 peer 外不要引入 npm 依赖（`lib/*.mjs` 只用 Node 内置）。
 - **`files` 白名单 + `exports`**：加了新的运行时模块/资源，记得进 `files`；任何需要按**包名**解析到的文件（配置模板、组合包 patch）还必须进 `exports`，否则就是 `ERR_PACKAGE_PATH_NOT_EXPORTED`（自检里有一条例会用真实 `node_modules` 链接解析这四个子路径）。

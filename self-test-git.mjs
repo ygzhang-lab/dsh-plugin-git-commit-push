@@ -19,6 +19,9 @@
  *   & "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" self-test-git.mjs
  */
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { numstat, parseStatusZ, rebaseInProgress, status, tagNameError } from './lib/git.js'
 import { survey } from './lib/survey.js'
@@ -437,6 +440,123 @@ await check('a caller subject with no body gets the per-file notes appended', as
     assert.match(body, /· src\/b\.js/)
   } finally {
     repo.cleanup()
+  }
+})
+
+console.log('\nreal git: publishing tags (a tag must actually reach the remote)')
+
+/**
+ * A work repo with a real (bare, path-based) remote already tracked.
+ *
+ * The remote is a directory, so pushing exercises the real code path with no
+ * network involved, and `remoteTags()` reads the bare repository directly —
+ * a tag that is only local cannot be mistaken for a delivered one.
+ */
+function createRepoWithRemote(prefix) {
+  const repo = createFixtureRepo(prefix)
+  const bareRoot = mkdtempSync(join(tmpdir(), `${prefix}remote-`))
+  const remote = join(bareRoot, 'origin.git')
+  repo.git(['init', '-q', '--bare', remote])
+  repo.git(['remote', 'add', 'origin', remote])
+  repo.git(['push', '-q', '-u', 'origin', 'main'])
+  return {
+    repo,
+    remote,
+    remoteTags: () => repo.git(['--git-dir', remote, 'tag', '--list']).trim().split('\n').filter(Boolean),
+    cleanup() {
+      repo.cleanup()
+      rmSync(bareRoot, { recursive: true, force: true })
+    },
+  }
+}
+
+await check('a tag created by this run is pushed to the remote', async () => {
+  const fixture = createRepoWithRemote('git-commit-tag-new-')
+  try {
+    fixture.repo.write('src/a.js', 'export const a = 1\n')
+    const result = await run({ get: () => undefined }, {
+      action: 'apply', message: 'feat(a): 新增 a', tag: 'v1.2.3', push: true, cwd: fixture.repo.dir,
+    }, undefined)
+    assert.equal(result.ok, true, `apply failed: ${result.card}`)
+    assert.equal(result.pushed, true, String(result.card))
+    assert.equal(result.tagCreated, 'v1.2.3', String(result.card))
+    assert.equal(result.tagPushed, true, String(result.card))
+    assert.match(String(result.card), /标签：v1\.2\.3/)
+    assert.deepEqual(fixture.remoteTags(), ['v1.2.3'], 'the remote must carry the tag')
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+await check('a tag that only exists locally is still published', async () => {
+  // The reported bug: a tag whose push failed earlier (or was made by hand) stayed
+  // local forever, because every later run saw "already exists" and skipped — while
+  // reporting "已跳过", which reads like success.
+  const fixture = createRepoWithRemote('git-commit-tag-local-')
+  try {
+    fixture.repo.git(['tag', 'v9.9.9'])
+    assert.deepEqual(fixture.remoteTags(), [], 'the fixture must start with no remote tag')
+    fixture.repo.write('src/b.js', 'export const b = 2\n')
+
+    const result = await run({ get: () => undefined }, {
+      action: 'apply', message: 'feat(b): 新增 b', tag: 'v9.9.9', push: true, cwd: fixture.repo.dir,
+    }, undefined)
+
+    assert.equal(result.ok, true, `apply failed: ${result.card}`)
+    assert.equal(result.tagCreated, undefined, 'an existing tag must not be recreated')
+    assert.equal(result.tagPushed, true, String(result.card))
+    assert.match(String(result.card), /标签：v9\.9\.9/)
+    assert.deepEqual(fixture.remoteTags(), ['v9.9.9'], 'the pre-existing local tag must reach the remote')
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+await check('a tag that cannot be pushed is reported as local-only', async () => {
+  // The card must never imply a tag was published when it was not: that is how
+  // "the tag only exists on my machine" goes unnoticed.
+  const fixture = createRepoWithRemote('git-commit-tag-localonly-')
+  try {
+    fixture.repo.write('src/c.js', 'export const c = 3\n')
+    const result = await run({ get: () => undefined }, {
+      action: 'apply', message: 'feat(c): 新增 c', tag: 'v1.0.0', push: false, cwd: fixture.repo.dir,
+    }, undefined)
+    assert.equal(result.ok, true, `apply failed: ${result.card}`)
+    assert.equal(result.pushed, false)
+    assert.equal(result.tagCreated, 'v1.0.0')
+    assert.match(String(result.card), /标签：v1\.0\.0/)
+    assert.match(String(result.note ?? ''), /仅本地/)
+    assert.deepEqual(fixture.remoteTags(), [], 'nothing may reach the remote')
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+await check('with no upstream yet, branch and tag go out in one command', async () => {
+  // The other branch of the same code: a brand-new remote has no upstream, so the
+  // push names the remote itself and carries both refspecs.
+  const repo = createFixtureRepo('git-commit-tag-newbranch-')
+  const bareRoot = mkdtempSync(join(tmpdir(), 'git-commit-tag-newbranch-remote-'))
+  const remote = join(bareRoot, 'origin.git')
+  try {
+    repo.git(['init', '-q', '--bare', remote])
+    repo.git(['remote', 'add', 'origin', remote])
+    repo.write('src/d.js', 'export const d = 4\n')
+    const result = await run({ get: () => undefined }, {
+      action: 'apply', message: 'feat(d): 新增 d', tag: 'v2.0.0', push: true, cwd: repo.dir,
+    }, undefined)
+    assert.equal(result.ok, true, `apply failed: ${result.card}`)
+    assert.equal(result.pushed, true, String(result.card))
+    assert.equal(result.tagPushed, true, String(result.card))
+    assert.deepEqual(
+      repo.git(['--git-dir', remote, 'tag', '--list']).trim().split('\n').filter(Boolean),
+      ['v2.0.0'],
+      'the remote must carry the tag',
+    )
+    assert.match(repo.git(['--git-dir', remote, 'rev-parse', 'refs/heads/main']), /^[0-9a-f]{40}/u)
+  } finally {
+    repo.cleanup()
+    rmSync(bareRoot, { recursive: true, force: true })
   }
 })
 
