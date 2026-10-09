@@ -52,7 +52,17 @@ import { apply, applyCard, inject, COMMAND_NAME, parseCommitCommand, run, TOOL_D
  */
 const REAL_USER_CONFIG = join(homedir(), '.dsh', 'git-commit-push.config.json')
 const realUserConfigBefore = existsSync(REAL_USER_CONFIG) ? statSync(REAL_USER_CONFIG).mtimeMs : undefined
-process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-home-sandbox-'))
+const sandboxHome = mkdtempSync(join(tmpdir(), 'dsh-home-sandbox-'))
+process.env.DSH_HOME = sandboxHome
+// …and take the scratch directory with us when the run ends: it is per-run state,
+// and leaving it behind litters the temp directory once per suite invocation.
+process.on('exit', () => {
+  try {
+    rmSync(sandboxHome, { recursive: true, force: true })
+  } catch {
+    // A leftover temp directory is not worth failing an otherwise green run over.
+  }
+})
 
 let passed = 0
 const failures = []
