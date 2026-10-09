@@ -101,6 +101,27 @@ Remove-Item -LiteralPath "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\ds
 rm -rf ~/.dsh/profiles/desktop/node_modules/dsh-plugin-git-commit-push
 ```
 
+### 已经发布了新版本，插件页却升不上去（pnpm 的 release-age 策略）
+
+pnpm 11 的供给链策略会拒绝「发布时长不足 N 分钟」的版本，而豁免项写成**带版本**的形式时，只放行你写的那一个版本：
+
+```yaml
+# %USERPROFILE%\.dsh\profiles\desktop\pnpm-workspace.yaml
+minimumReleaseAgeExclude:
+  - dsh-plugin-git-commit-push@1.0.1   # 只放行 1.0.1 —— 发了 1.0.2 照样被挡
+```
+
+把版本号去掉、**按包名**豁免，本插件以后所有版本都不再受这条策略限制（实测：同一份空 lock 重新解析，
+改之前只肯给 1.0.1，改之后直接给最新版本）：
+
+```yaml
+minimumReleaseAgeExclude:
+  - dsh-plugin-git-commit-push
+```
+
+另外注意：**`pnpm install` 遵守 lockfile**，所以在插件页「卸载再装」不一定换到新版本；要指定版本就用
+`pnpm add dsh-plugin-git-commit-push@1.0.3`（或插件页的更新动作），它会重写 lock 里那一条。
+
 ### 装完确认
 
 重启 DSH 后：
@@ -235,13 +256,22 @@ DSH 的设置页里也**不会有**它的表单。原因很直白：那个表单
 而一个**悄悄什么都不做**的配置界面，比没有配置界面更糟——于是 `lib/schema.js` 被删除，
 `@deepseek-ai/schemastery` 不再是依赖，`uiOverrides` / `resolveSettings` 那套行配置层也一并去掉。
 
+**装完就有得改：插件在挂载时把配置模板写到 `<DSH_HOME>/git-commit-push.config.json`。**
+DSH 启动加载插件时，如果这个文件还不存在，插件就用包内模板生成一份（里面每个键、每段说明都在），
+所以装完重启 DSH 之后，你直接打开 `~/.dsh/git-commit-push.config.json` 编辑即可——不必去
+`node_modules` 里翻模板，也不必担心重装插件把它冲掉（它不在包目录里）。规则很简单：
+
+- **只在文件不存在时创建**（用排他写 `wx`，不是先判断再写），所以你手改过的文件永远优先，绝不会被覆盖；
+- **不会因为这件事失败**：家目录不可写、`$DSH_HOME` 指向一个文件等情况下只记一条日志，插件照常挂载（用内置默认值）；
+- **删掉它就是「回到默认值」**——下次 DSH 启动会再生成一份全新的。
+
 **两层来源，自上而下覆盖：**
 
-| 层  | 位置                                                                                  | 谁写它               |
-| --- | ------------------------------------------------------------------------------------- | -------------------- |
-| 1   | `<DSH_HOME>/git-commit-push.config.json`（默认 `~/.dsh/git-commit-push.config.json`） | 你自己编辑           |
-| 2   | 包内模板 `git-commit-push.config.json`                                                | 随包出货             |
-| —   | 内置默认值                                                                            | 兜住以上都没设的字段 |
+| 层  | 位置                                                                                  | 谁写它                        |
+| --- | ------------------------------------------------------------------------------------- | ----------------------------- |
+| 1   | `<DSH_HOME>/git-commit-push.config.json`（默认 `~/.dsh/git-commit-push.config.json`） | **插件首次挂载时自动生成**，之后你自己编辑 |
+| 2   | 包内模板 `git-commit-push.config.json`                                                | 随包出货（重装会被替换）      |
+| —   | 内置默认值                                                                            | 兜住以上都没设的字段          |
 
 文件缺失不是错误（用默认值）；文件存在但不是合法 JSON 时，结果卡片里会追加一行
 「配置未生效：…」，而不是静默忽略。没写的键保持默认值。**改完不用重启 DSH**：下一次工具调用
@@ -263,6 +293,7 @@ DSH 的设置页里也**不会有**它的表单。原因很直白：那个表单
 
 > 用户文件不一定要写全：只想改一两个键，就只写那两个键，其余保持内置默认值。
 > 包内模板是随包出货的那一份，改它会在升级包时被覆盖——你自己的设置放用户文件。
+> 用户文件里**没有**的键，就是插件后来新增的：插件不会改写你已有的文件（怕覆盖你的手改），新键直接走内置默认值。
 > 字段的说明文字是中文（提交信息的默认语言）。
 
 环境变量：
@@ -315,7 +346,7 @@ DSH 的设置页里也**不会有**它的表单。原因很直白：那个表单
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（85 项）
+node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（90 项）
 node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交、逐文件注释、卡片结论（24 项）
 node capture-git-format.mjs     # 只打印真实 git 的 -z 原始字节，用于诊断分帧问题
 ```
@@ -360,7 +391,7 @@ lib/profile-edit.mjs     两个安装脚本共用的 profile 清单编辑器（�
 lib/profile-link.mjs     两个安装脚本共用的 node_modules 陈旧条目清理器（链接只 unlink、不跟随，防 ERR_PNPM_EPERM）
 setup.ps1                Windows 安装 / 卸载（方式 C）
 setup.sh                 macOS / Linux 安装 / 卸载（方式 C）
-self-test.mjs            纯逻辑 + 打包 / 配置契约自检（85 项）
+self-test.mjs            纯逻辑 + 打包 / 配置契约自检（90 项）
 self-test-git.mjs        真实 git 集成自检（24 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（诊断分帧问题）
 e2e-check.mjs            直连调用 run()，用于不重启验证提交路径
@@ -373,7 +404,7 @@ e2e-check.mjs            直连调用 run()，用于不重启验证提交路径
 代价是必须手写**真正的 JSON Schema**：`parameters` 需要 `type: "object"` + `properties` + `required: []`，`output.schema` 的 `required` 必须是**字符串数组**
 （`defineTool` 的 per-property `required: true` 语法只由 `defineTool` 自己编译；手写定义直接送进注册表会被拒，且是在**注册时**抛错，整个插件都装不上）。`toolDefinitionProblems()` 就是这条规则的回归测试。
 
-`exports` 里除 `.` 之外还导出 `./package.json` 与 `./locale/*`：插件页读显示文本时走的是 Node 的模块解析（`readPluginMeta` 解析 `<specifier>/package.json` 与 `<specifier>/locale/en.json`），只有 `.` 的 exports 映射会让这两个查找得到 `ERR_PACKAGE_PATH_NOT_EXPORTED`，标题就退化成整串模块说明符。
+`exports` 里除 `.` 之外还导出 `./package.json`、`./locale/*`、`./git-commit-push.config.json` 与 `./cordis.patch.yml`：插件页读显示文本时走的是 Node 的模块解析（`readPluginMeta` 解析 `<specifier>/package.json` 与 `<specifier>/locale/en.json`），只有 `.` 的 exports 映射会让这些查找得到 `ERR_PACKAGE_PATH_NOT_EXPORTED`。**同一堵墙也会挡住配置文件**：`git-commit-push.config.json` 确实在 tarball 里、也确实躺在安装目录里，但只要 `exports` 不映射它，任何按包名解析它的代码（例如 `import '<包名>/git-commit-push.config.json'`）都会失败——表现为「装了这个包，却拿不到它的配置模板」。`cordis.patch.yml` 属于同一类，launcher 目前按包目录读它，但按包名解析时同样需要映射。自检里有一条**真的建一个 `node_modules` 链接去解析这四个子路径**的用例守着它们。
 
 `peerDependencies` 只声明 `@deepseek-ai/dsh-tools` 且标为 **optional**：它的作用是让 DSH 的兼容性检查
 （`evaluatePluginCompatibility`，只读 `peerDependencies`）能拿宿主版本比对；标 optional 则保证 pnpm

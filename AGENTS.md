@@ -5,7 +5,7 @@
 
 - 语言：面向用户的文档/卡片/提交信息默认**中文**（`defaultLanguage: "zh"` 可切 `en`）；代码注释与标识符英文。
 - 包名：`dsh-plugin-git-commit-push`；工具名 `git_commit_push`；斜杠命令 `git-commit-push`；skill 名 `git-commit-push`（**四处同名**，不要引入第二套名字）。
-- 当前版本 `1.0.2`（npm 上只有 `1.0.1`，`1.0.2` 未发布）。零运行时依赖。
+- 当前版本 `1.0.3`（npm 上已有 `1.0.1`、`1.0.2`）。零运行时依赖。
 
 ---
 
@@ -32,12 +32,12 @@ icon.svg / locale/{zh,en}.json  插件页显示元数据
 lib/git.js               唯一与 git 对话的地方：固定 argv 表、超时、输出上限、porcelain/-z 解析、平台探测
 lib/analyze.js           改动分类 + 规则化 Conventional Commits 生成 + prepare 卡片渲染
 lib/survey.js            一次仓库摸底：status / numstat / log / 有界 diff
-lib/config.js            配置读取（用户文件 > 包内模板 > 内置默认值）+ 字段表 FIELDS
+lib/config.js            配置读取（用户文件 > 包内模板 > 内置默认值）+ 字段表 FIELDS + ensureUserConfig（挂载时把可编辑的用户配置生成到 $DSH_HOME）
 lib/skill.js             从 SKILL.md 解析运行时 skill 定义
 lib/profile-edit.mjs     setup.ps1 / setup.sh 共用的 profile 清单编辑器（幂等、保留未知字段、自校验）
 lib/profile-link.mjs     setup.ps1 / setup.sh 共用的「清掉 node_modules 里的残留项」（见 §5）
 setup.ps1 / setup.sh     Windows / macOS·Linux 的源码（link:）安装与卸载
-self-test.mjs            纯逻辑 + 打包/配置/skill 契约自检（85 项，不需要 DSH、不碰你的仓库）
+self-test.mjs            纯逻辑 + 打包/配置/skill 契约自检（90 项，不需要 DSH、不碰你的仓库）
 self-test-git.mjs        真实 git 集成自检（24 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（分帧问题诊断）
 e2e-check.mjs            直接调 run()，用于不重启验证提交路径
@@ -49,7 +49,7 @@ e2e-check.mjs            直接调 run()，用于不重启验证提交路径
 
 ```powershell
 $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
-& $node self-test.mjs        # 纯逻辑 + 打包契约，必须 85 passed / 0 failed
+& $node self-test.mjs        # 纯逻辑 + 打包契约，必须 90 passed / 0 failed
 & $node self-test-git.mjs    # 真实 git，必须 24 passed / 0 failed
 ```
 
@@ -59,7 +59,7 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 
 `run()`（index.js）→ `runWithSettings()`：
 
-1. `loadSettingsReport()` 读配置（**唯一渠道**：`$DSH_HOME/git-commit-push.config.json` > 包内模板 > 默认值）。文件坏了要在卡片里报出来，不许静默忽略。
+1. `loadSettingsReport()` 读配置（**唯一渠道**：`$DSH_HOME/git-commit-push.config.json` > 包内模板 > 默认值）。文件坏了要在卡片里报出来，不许静默忽略。用户配置文件由 `apply()` 在挂载时用 `ensureUserConfig()` 生成：只在缺失时写、绝不覆盖手改、失败只记日志（不能让插件挂不上）。
 2. `survey({ cwd, language, maxFilesShown })`（lib/survey.js）一次拿全：分支、entries、stats、近几条提交、有界 diff、版本号变化、是否无 upstream。**不是仓库 / 干净 / 多仓库**三种情况分别返回不同卡片，不许猜。
 3. `prepare` 分支：只回 `renderCard()` 的预览卡片，不动仓库。
 4. `apply`/`auto`：`doCommit()` → `stageAll`（autoAdd）→ `numstat`（**必须 await，否则 +0/-0**，这是修过的真实 bug）→ `commit()`；再 `tagDecision()` + `askTag()`（内置提问卡片，不花 token）→ `doTagAndPush()` → `applyCard()`。
@@ -92,7 +92,8 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 - `package.json` 的 `dsh.bundle.patch: ./cordis.patch.yml` 是「能被 Plugins 页管理」的唯一条件；没有它就报 `not-bundle`（「这个包没有声明组合包，不能作为插件管理」）。
 - Loader 的 `insert` 是**追加**语义且不去重：同一 `id` 插两次 = 挂载两份。挂载行只能出现在 `cordis.patch.yml`，不要写进用户的 profile patch。
 - profile 的 `pnpm-workspace.yaml` 通常是 `nodeLinker: hoisted` + `autoInstallPeers: false`：peer 不会自动装（所以 `@deepseek-ai/dsh-tools` 是 optional peer，只为兼容性检查而存在，插件并不 import 它）。
-- `files` 白名单必须覆盖入口点 import 的每个相对模块（测试会查）；`exports` 必须保留 `./package.json` 与 `./locale/*`，否则插件页读不到标题。
+- `files` 白名单必须覆盖入口点 import 的每个相对模块（测试会查）；`exports` 必须保留 `./package.json` 与 `./locale/*`，否则插件页读不到标题——**并且必须映射 `./git-commit-push.config.json` 与 `./cordis.patch.yml`**：文件在 tarball 里、在安装目录里，都不等于能按包名解析到，缺映射就是 `ERR_PACKAGE_PATH_NOT_EXPORTED`（曾真的漏过配置文件）。
+- **新版本装不上，多半不是 lockfile，而是 release-age 豁免写成了带版本的形式**：pnpm 的供给链策略按分钟算「发布时长」，`minimumReleaseAgeExclude` 里写 `pkg@1.0.1` 只放行那一个版本，写 `pkg` 才是不限版本。实测：把 profile lock 里本插件的条目整个删掉、重新解析，依然只给 1.0.1；把豁免改成按包名后立刻给最新版。另：`pnpm install` 遵守 lockfile，换不动版本，换版本要用 `pnpm add pkg@x.y.z`。
 
 ## 6. DSH 宿主事实（省得重新挖 app.asar）
 
@@ -115,14 +116,14 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 - **git 只走 `lib/git.js`**，动词表固定；**绝不**改 `.gitignore`、改 git config、`push --force`、`reset --hard`、`git clean`、`checkout -- <path>`、`commit --no-verify`。推送被拒 → `pull --rebase` 重推一次；rebase 冲突 → 只 abort 自己启动的 rebase。
 - **卡片形态**（§4）：结果卡片保持「结论 + 一行数量汇总」，不要再塞逐文件列表。
 - **零依赖**：除可选 peer 外不要引入 npm 依赖（`lib/*.mjs` 只用 Node 内置）。
-- **`files` 白名单 + `exports`**：加了新的运行时模块/资源，记得进 `files`。
+- **`files` 白名单 + `exports`**：加了新的运行时模块/资源，记得进 `files`；任何需要按**包名**解析到的文件（配置模板、组合包 patch）还必须进 `exports`，否则就是 `ERR_PACKAGE_PATH_NOT_EXPORTED`（自检里有一条例会用真实 `node_modules` 链接解析这四个子路径）。
 - 两个安装脚本**只做两件事**（写 profile 清单、跑 pnpm），共用 `lib/profile-edit.mjs` 与 `lib/profile-link.mjs`；不要在 shell 里再写一遍「改 JSON」或「删目录」。
 
 ## 8. 常见任务
 
 | 任务 | 怎么做 |
 | --- | --- |
-| 加一个配置项 | `lib/config.js` 的 `DEFAULTS` + `FIELDS` + `normalize()` + `git-commit-push.config.json` 模板；测试会查三处一致 |
+| 加一个配置项 | `lib/config.js` 的 `DEFAULTS` + `FIELDS` + `normalize()` + `git-commit-push.config.json` 模板；测试会查三处一致。注意**已存在的用户文件不会被改写**（避免覆盖手改），新键只在新建的文件里出现，老文件缺的键走内置默认值 |
 | 改卡片文案 | `index.js` 的 `applyCard`（结果）/ `lib/analyze.js` 的 `renderCard`（预览）；同步 `self-test.mjs` 与两个 README |
 | 加一个 git 动作 | 只能加在 `lib/git.js` 的固定 argv 表里，并补 `self-test-git.mjs` |
 | 改触发规则 | 同时改 `git_commit_push` 描述、`SKILL.md`、命令 `description` |

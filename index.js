@@ -27,7 +27,7 @@
  * the candidate repositories instead.
  */
 import {
-  loadSettingsReport, CONFIG_PATH, userConfigPath, configCandidates,
+  ensureUserConfig, loadSettingsReport, CONFIG_PATH, userConfigPath, configCandidates,
 } from './lib/config.js'
 import { skillDefinition } from './lib/skill.js'
 import { survey } from './lib/survey.js'
@@ -874,6 +874,17 @@ export function toolDefinitionProblems() {
  */
 export function apply(ctx) {
   PLUGIN_CONTEXT = ctx
+  // Hand the user an editable settings file before anything else can be asked of
+  // the plugin. Since the settings form was removed this JSON file is the ONLY
+  // configuration channel, and a template that lives inside `node_modules` — where
+  // nobody looks and every reinstall replaces it — is not findable. Never
+  // overwrites, never throws; see `ensureUserConfig`.
+  const settingsFile = ensureUserConfig()
+  if (settingsFile.status === 'created') {
+    ctx.logger?.info?.(`${name}: created ${settingsFile.path} — edit it to change settings (no restart needed)`)
+  } else if (settingsFile.status === 'failed') {
+    ctx.logger?.warn?.(`${name}: could not create ${settingsFile.path}; built-in defaults apply (${brief(settingsFile.error)})`)
+  }
   // Fail loudly and specifically here rather than with an opaque registry error:
   // a malformed definition is an authoring bug the host reports once, at boot.
   const problems = toolDefinitionProblems()

@@ -24,6 +24,7 @@ import {
   existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync,
   symlinkSync, writeFileSync,
 } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -31,7 +32,7 @@ import { fileURLToPath } from 'node:url'
 import { git, parseStatusZ, tagNameError } from './lib/git.js'
 import { buildMessage, inferType, scopeOf, totalsOf, typeOfPath, declaredSymbols, removedDeclarationCount, renderCard } from './lib/analyze.js'
 import { normalizeEntries } from './lib/survey.js'
-import { loadSettingsReport, DEFAULTS, FIELDS as SETTINGS_FIELDS, IDENTITY_FIELDS } from './lib/config.js'
+import { ensureUserConfig, loadSettingsReport, DEFAULTS, FIELDS as SETTINGS_FIELDS, IDENTITY_FIELDS, USER_CONFIG_COMMENT } from './lib/config.js'
 import { clearStaleEntry } from './lib/profile-link.mjs'
 import { parseSkillFile, skillDefinition, SKILL_NAME, SKILL_PATH } from './lib/skill.js'
 import { apply, applyCard, inject, COMMAND_NAME, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
@@ -658,7 +659,7 @@ check('the visual settings form stays removed', () => {
   assert.equal(/export function uiOverrides/u.test(configText), false)
   assert.equal(/export function resolveSettings/u.test(configText), false)
   assert.equal(/export function loadFileSettingsSync/u.test(configText), false)
-  assert.equal(/readFileSync/u.test(configText), false, 'nothing needs a synchronous settings read any more')
+  assert.match(configText, /export function ensureUserConfig/u, 'the mount-time user-config generator must exist')
   // A user who reads the shipped template must not be sent looking for a form.
   const template = readFileSync(join(PACKAGE_DIR, 'git-commit-push.config.json'), 'utf8')
   assert.match(template, /ONLY configuration channel/u)
@@ -703,6 +704,45 @@ check('the tarball carries the files the plugin reads at runtime', () => {
   ]) {
     assert.equal(existsSync(join(PACKAGE_DIR, required)), true, `${required} is missing`)
     assert.equal(coveredByFiles(required), true, `files does not publish ${required}`)
+  }
+})
+
+check('every package file a consumer resolves by name is exported', () => {
+  // `exports` is a wall, not a convenience. A file that ships in the tarball and
+  // sits in the installed directory is STILL invisible to `import '<pkg>/…'`
+  // unless the subpath is mapped here: Node answers ERR_PACKAGE_PATH_NOT_EXPORTED.
+  // The host resolves package files exactly this way (that is why package.json and
+  // locale/* are exported), so the config template a user must copy — now that the
+  // settings form is gone, the ONLY configuration channel — and the bundle patch
+  // the launcher reads have to be reachable too. This actually resolves through a
+  // real node_modules entry instead of reading the map, so a typo cannot pass.
+  const root = mkdtempSync(join(tmpdir(), 'dsh-exports-'))
+  try {
+    mkdirSync(join(root, 'node_modules'))
+    symlinkSync(
+      PACKAGE_DIR,
+      join(root, 'node_modules', manifest.name),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    )
+    const require = createRequire(join(root, 'index.js'))
+    for (const subpath of [
+      'package.json',
+      'locale/en.json',
+      'git-commit-push.config.json',
+      'cordis.patch.yml',
+    ]) {
+      let resolved
+      try {
+        resolved = require.resolve(`${manifest.name}/${subpath}`)
+      } catch (error) {
+        throw new Error(`${subpath} is not reachable through the package name: ${error.code}`)
+      }
+      assert.equal(existsSync(resolved), true, `${subpath} resolved to ${resolved}, which does not exist`)
+      // Path separators differ by platform; compare the normalized tail.
+      assert.equal(resolved.replace(/\\/gu, '/').endsWith(subpath), true, `${subpath} resolved to ${resolved}`)
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })
 
@@ -766,6 +806,80 @@ await checkAsync('a malformed user config is reported, not silently ignored', as
     assert.match(report.problem, /不是合法的 JSON 配置/)
     assert.equal(report.settings.autoPush, DEFAULTS.autoPush)
   })
+})
+
+await checkAsync('the plugin leaves an editable settings file in the DSH home', async () => {
+  // The settings form is gone, so this file IS the configuration surface — and a
+  // surface the user cannot find does not exist. Writing it at mount is what puts
+  // it where the docs say it lives, and where a reinstall does not replace it.
+  await withTemporaryDshHome(async (home) => {
+    const path = join(home, 'git-commit-push.config.json')
+    assert.equal(existsSync(path), false, 'the fixture starts without a user config')
+
+    const created = ensureUserConfig()
+    assert.equal(created.status, 'created')
+    assert.equal(created.path, path)
+    assert.equal(existsSync(path), true)
+
+    // A complete, valid starting point: every documented key, and the comment that
+    // says what the file is, that it wins, and that deleting it restores defaults.
+    const written = JSON.parse(readFileSync(path, 'utf8'))
+    assert.equal(written.$comment, USER_CONFIG_COMMENT)
+    assert.match(written.$comment, /删除本文件即回到内置默认值/u)
+    for (const field of SETTINGS_FIELDS) {
+      assert.equal(Object.hasOwn(written, field.key), true, `the generated file is missing ${field.key}`)
+    }
+    for (const field of IDENTITY_FIELDS) {
+      assert.equal(Object.hasOwn(written.pinnedIdentity ?? {}, field.key), true, `the generated file is missing pinnedIdentity.${field.key}`)
+    }
+  })
+})
+
+await checkAsync('the generated settings file is never overwritten', async () => {
+  await withTemporaryDshHome(async (home) => {
+    const path = join(home, 'git-commit-push.config.json')
+    writeFileSync(path, '{ "tagPrefix": "mine-" }')
+    assert.equal(ensureUserConfig().status, 'exists')
+    assert.equal(readFileSync(path, 'utf8'), '{ "tagPrefix": "mine-" }', 'a hand-edited file must survive')
+    // It is also the file the loader reads, so that edit is what takes effect.
+    const report = await loadSettingsReport()
+    assert.equal(report.source, path)
+    assert.equal(report.settings.tagPrefix, 'mine-')
+  })
+})
+
+await checkAsync('apply() writes the settings file, and logs it, on a fresh install', async () => {
+  await withTemporaryDshHome(async (home) => {
+    const logged = []
+    apply({
+      tools: { register: () => {} },
+      inject: () => {},
+      logger: { info: (message) => logged.push(message), warn: (message) => logged.push(message) },
+    })
+    assert.equal(existsSync(join(home, 'git-commit-push.config.json')), true, 'mounting must leave the file behind')
+    assert.equal(logged.some(line => line.includes('git-commit-push.config.json')), true, 'creating it must be logged')
+  })
+})
+
+await checkAsync('an unusable DSH home degrades to a status instead of a throw', async () => {
+  // A missing config file is a VALID state (built-in defaults apply), so nothing
+  // here may take the plugin down: it has to mount with or without the file.
+  const home = mkdtempSync(join(tmpdir(), 'dsh-config-blocked-'))
+  const previous = process.env.DSH_HOME
+  try {
+    // DSH_HOME pointing at an existing FILE makes creating a directory impossible.
+    const blocked = join(home, 'not-a-directory')
+    writeFileSync(blocked, 'x')
+    process.env.DSH_HOME = blocked
+    const outcome = ensureUserConfig()
+    assert.equal(outcome.status, 'failed')
+    assert.notEqual(outcome.error, undefined)
+    apply({ tools: { register: () => {} }, inject: () => {}, logger: { warn: () => {} } })
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+    rmSync(home, { recursive: true, force: true })
+  }
 })
 
 console.log('\nthe embedded skill')
