@@ -353,7 +353,7 @@ DSH 启动加载插件时，如果这个文件还不存在，插件就用包内�
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（90 项）
+node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（91 项）
 node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交、逐文件注释、卡片结论（28 项）
 node capture-git-format.mjs     # 只打印真实 git 的 -z 原始字节，用于诊断分帧问题
 ```
@@ -398,7 +398,7 @@ lib/profile-edit.mjs     两个安装脚本共用的 profile 清单编辑器（�
 lib/profile-link.mjs     两个安装脚本共用的 node_modules 陈旧条目清理器（链接只 unlink、不跟随，防 ERR_PNPM_EPERM）
 setup.ps1                Windows 安装 / 卸载（方式 C）
 setup.sh                 macOS / Linux 安装 / 卸载（方式 C）
-self-test.mjs            纯逻辑 + 打包 / 配置契约自检（90 项）
+self-test.mjs            纯逻辑 + 打包 / 配置契约自检（91 项）
 self-test-git.mjs        真实 git 集成自检（28 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（诊断分帧问题）
 e2e-check.mjs            直连调用 run()，用于不重启验证提交路径

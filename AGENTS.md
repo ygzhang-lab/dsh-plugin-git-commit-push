@@ -37,7 +37,7 @@ lib/skill.js             从 SKILL.md 解析运行时 skill 定义
 lib/profile-edit.mjs     setup.ps1 / setup.sh 共用的 profile 清单编辑器（幂等、保留未知字段、自校验）
 lib/profile-link.mjs     setup.ps1 / setup.sh 共用的「清掉 node_modules 里的残留项」（见 §5）
 setup.ps1 / setup.sh     Windows / macOS·Linux 的源码（link:）安装与卸载
-self-test.mjs            纯逻辑 + 打包/配置/skill 契约自检（90 项，不需要 DSH、不碰你的仓库）
+self-test.mjs            纯逻辑 + 打包/配置/skill 契约自检（91 项，不需要 DSH、不碰你的仓库）
 self-test-git.mjs        真实 git 集成自检（28 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（分帧问题诊断）
 e2e-check.mjs            直接调 run()，用于不重启验证提交路径
@@ -49,7 +49,7 @@ e2e-check.mjs            直接调 run()，用于不重启验证提交路径
 
 ```powershell
 $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
-& $node self-test.mjs        # 纯逻辑 + 打包契约，必须 90 passed / 0 failed
+& $node self-test.mjs        # 纯逻辑 + 打包契约，必须 91 passed / 0 failed
 & $node self-test-git.mjs    # 真实 git，必须 28 passed / 0 failed
 ```
 

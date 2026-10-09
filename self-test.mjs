@@ -25,7 +25,7 @@ import {
   symlinkSync, writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -36,6 +36,23 @@ import { ensureUserConfig, loadSettingsReport, DEFAULTS, FIELDS as SETTINGS_FIEL
 import { clearStaleEntry } from './lib/profile-link.mjs'
 import { parseSkillFile, skillDefinition, SKILL_NAME, SKILL_PATH } from './lib/skill.js'
 import { apply, applyCard, inject, COMMAND_NAME, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
+
+/**
+ * Point the whole run at a throwaway DSH home, so no test can write into the
+ * developer's real one.
+ *
+ * `apply()` creates the user's settings file at
+ * `$DSH_HOME/git-commit-push.config.json` on mount, and tests below call it. Two
+ * of them used to call it with no `DSH_HOME` override, so merely running this
+ * suite created that file in the real `~/.dsh` on every machine — measured here:
+ * the file appeared at 09:57:18, bracketed by two suite runs (09:57:11 and
+ * 09:57:29), which is a test artifact, not an install. `withTemporaryDshHome`
+ * still narrows it further per test and restores this sandbox afterwards; the
+ * last check re-reads the real path to prove this run left it alone.
+ */
+const REAL_USER_CONFIG = join(homedir(), '.dsh', 'git-commit-push.config.json')
+const realUserConfigBefore = existsSync(REAL_USER_CONFIG) ? statSync(REAL_USER_CONFIG).mtimeMs : undefined
+process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'dsh-home-sandbox-'))
 
 let passed = 0
 const failures = []
@@ -1088,6 +1105,17 @@ check('both installers run the shared cleanup instead of their own copy', () => 
     false,
     'setup.sh must not delete the entry itself',
   )
+})
+
+console.log("\nthe suite leaves the developer's real DSH home alone")
+
+check('this run did not write the real ~/.dsh settings file', () => {
+  // The regression this guards: `apply()` writes `$DSH_HOME/git-commit-push.config.json`,
+  // so an unisolated test created that file in the real home of whoever ran the
+  // suite — a test artifact that looks exactly like the plugin's own first mount.
+  const after = existsSync(REAL_USER_CONFIG) ? statSync(REAL_USER_CONFIG).mtimeMs : undefined
+  assert.equal(after, realUserConfigBefore, `${REAL_USER_CONFIG} was written by this test run`)
+  assert.equal(String(process.env.DSH_HOME).startsWith(tmpdir()), true, 'DSH_HOME must stay inside the temp sandbox')
 })
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`)

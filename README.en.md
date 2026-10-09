@@ -404,7 +404,7 @@ directory and delete them):
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # pure logic + packaging/config/skill contracts (90 checks)
+node self-test.mjs              # pure logic + packaging/config/skill contracts (91 checks)
 node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit, per-file notes, card verdicts (28 checks)
 node capture-git-format.mjs     # prints raw git -z bytes, for diagnosing framing
 ```
@@ -471,7 +471,7 @@ lib/profile-edit.mjs     profile manifest editor shared by both installers (idem
 lib/profile-link.mjs     stale node_modules entry remover shared by both installers (unlinks a link, never follows it, so ERR_PNPM_EPERM cannot recur)
 setup.ps1                Windows install / uninstall (path C)
 setup.sh                 macOS / Linux install / uninstall (path C)
-self-test.mjs            pure logic + packaging/config contracts (90 checks)
+self-test.mjs            pure logic + packaging/config contracts (91 checks)
 self-test-git.mjs        real-git integration (24 checks, own temporary repository)
 capture-git-format.mjs   prints raw git -z bytes (framing diagnostics)
 e2e-check.mjs            calls run() directly, to verify the commit path without restarting DSH
