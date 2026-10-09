@@ -4,8 +4,8 @@ English | [中文](README.md)
 
 DSH (DeepSeek Harness) Git commit and push plugin, one call to complete: summarize changes, automatically generate commit messages for each changed file according to Conventional Commits, ask for tagging if necessary, and then push to the Git remote repository configured for the current project.
 
-- Users can complete a commit and push with just a 0 Token through the `/git-commit-push` slash command (without going through the model, as the script automatically generates simple and clear commits according to the rules);
-- DSH can utilize the `git_commit_push` tool, requiring minimal tokens to accomplish high-quality annotations and complete a single commit and push.
+-  Users can complete a commit and push with just a 0 Token through the `/git-commit-push` slash command (without going through the model, as the script automatically generates simple and clear commits according to the rules);
+-  DSH can utilize the `git_commit_push` tool, requiring minimal tokens to accomplish high-quality annotations and complete a single commit and push.
   This plugin serves as a tool-based replacement for the earlier `.agents/skills/git-commit-push` Skill. It condenses the process of running dozens of Shell scripts and reading through a pile of raw Git output, which is typically required for pure Skill work, into **1-2 tool invocations + a compact card**.
 
 Installing gives you three surfaces:
@@ -34,12 +34,16 @@ package declares `dsh.bundle.patch` and makes itself a DSH _bundle_. Without tha
 answers every request with **"这个包没有声明组合包，不能作为插件管理"** (host code `not-bundle`).
 
 ### B. Command line
-
+> install
+dsh plugin --profile <profile> add dsh-plugin-git-commit-push     
 ```sh
-dsh plugin --profile <profile> add dsh-plugin-git-commit-push     # install
-dsh plugin --profile <profile> remove dsh-plugin-git-commit-push  # uninstall
+dsh plugin --profile web add dsh-plugin-git-commit-push 
 ```
-
+> uninstall
+dsh plugin --profile <profile> remove dsh-plugin-git-commit-push 
+```sh
+dsh plugin --profile web remove dsh-plugin-git-commit-push
+```
 `<profile>` is your profile name (`web`, `headless`, a custom one). Both directions edit the profile's
 `package.json` (dependency + `dsh.profile.bundles`) and **need a DSH restart**.
 

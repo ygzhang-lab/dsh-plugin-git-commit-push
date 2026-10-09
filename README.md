@@ -1,10 +1,10 @@
 # dsh-plugin-git-commit-push
 
 [English](README.en.md) | 中文
-DSH（DeepSeek Harness）Git 提交推送插件，一次调用完成：汇总改动，按 Conventional Commits 为每个变更文件自动生成提交信息，必要时询问打标签，然后推送到当前项目配置的 Git 远程仓库。
+DSH（DeepSeek Harness） 0 Token Git 提交推送插件，一次调用完成：汇总改动，按 Conventional Commits 为每个变更文件自动生成提交信息，必要时询问打标签，然后推送到当前项目配置的 Git 远程仓库。
 
-- 用户可通过 `/git-commit-push` 斜杠命令, 0 Token 即可完成一次提交与推送(不经过模型，脚本自动按规则生成简单明了的 Commits )；
-- DSH 可使用 `git_commit_push` 工具, 极少 Token 即可完成高质量的注释和一次提交与推送。
+-  通过 `/git-commit-push` 斜杠命令使用, 0 Token 即可完成一次提交与推送(不经过模型，脚本自动按规则生成简单明了的 Commits )；
+-  通过 `git_commit_push` 工具调用, 极少 Token 即可完成高质量的注释和一次提交与推送。
 
 本插件是早期 `.agents/skills/git-commit-push` 这个 Skill 的工具化替代，把纯 Skill 工作需要模型跑十来条 Shell，读一堆 Git 原始输出的流程，压成 **1–2 次工具调用 + 一张紧凑卡片**。
 
@@ -23,8 +23,7 @@ DSH（DeepSeek Harness）Git 提交推送插件，一次调用完成：汇总改
 
 ### 方式 A：插件页（推荐）
 
-DSH → **设置 → 插件** → 安装框里填包名：
-
+> DSH → **设置 → 插件** → 安装框里填包名：
 ```
 dsh-plugin-git-commit-push
 ```
@@ -34,12 +33,16 @@ dsh-plugin-git-commit-push
 **「这个包没有声明组合包，不能作为插件管理」**（host 侧错误码 `not-bundle`）。
 
 ### 方式 B：命令行
-
+> 安装
+dsh plugin --profile <profile> add dsh-plugin-git-commit-push
 ```sh
-dsh plugin --profile <profile> add dsh-plugin-git-commit-push     # 装
-dsh plugin --profile <profile> remove dsh-plugin-git-commit-push  # 卸
+dsh plugin --profile web add dsh-plugin-git-commit-push
 ```
-
+> 卸载
+dsh plugin --profile web remove dsh-plugin-git-commit-push  
+```sh
+dsh plugin --profile <profile> remove dsh-plugin-git-commit-push 
+```
 `<profile>` 是你的 profile 名（如 `web`、`headless`、自定义名）。装/卸都会改 profile 的
 `package.json`（依赖 + `dsh.profile.bundles`），**需要重启 DSH** 才生效。
 
