@@ -102,6 +102,18 @@ creates, and **never overwriting anything that exists**. This path was found the
 revision unlinked a perfectly good junction on a second run, pnpm refused to rebuild it, and the profile
 **silently lost the plugin**.
 
+**If you uninstalled a `link:` install from the Plugins page and then installed from npm**: that is the usual
+trigger. The Plugins page only edits the profile manifest and runs `pnpm install` again, and when pnpm drops a
+`link:` dependency it prints `Already up to date` **and leaves that entry in place** (measured with pnpm
+11.7.0) — so the npm install that follows is guaranteed to hit the EPERM above. To move from the `link:`
+install to the npm one, run `setup.ps1 -Uninstall` (`sh setup.sh --uninstall` on macOS/Linux) first, or delete
+the entry with the manual repair below and then install from the Plugins page.
+
+This failure **does not** damage your checkout: measured, a failed rename leaves every file of the link's
+target alone (a platform premise `self-test.mjs` guards). The converse also matters: **a reported error does
+not mean the package got installed** — trust the version the Plugins page shows and whether
+`node_modules/<name>` is a real directory rather than a link.
+
 **Manual repair**, if an install fails this way without the script: delete the stale entry and retry.
 
 ```powershell

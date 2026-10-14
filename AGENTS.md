@@ -5,7 +5,7 @@
 
 - 语言：面向用户的文档/卡片/提交信息默认**中文**（`defaultLanguage: "zh"` 可切 `en`）；代码注释与标识符英文。
 - 包名：`dsh-plugin-git-commit-push`；工具名 `git_commit_push`；斜杠命令 `git-commit-push`；skill 名 `git-commit-push`（**四处同名**，不要引入第二套名字）。
-- 当前版本 `1.0.4`（npm 上 `1.0.1`–`1.0.4` 都已发布，`1.0.4` 是 latest）。零运行时依赖。
+- 当前版本 `1.0.5`（npm 上 `1.0.1`–`1.0.5` 都已发布，`1.0.5` 是 latest）。零运行时依赖。
 
 ---
 
@@ -103,6 +103,13 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 - 现在：已存在的键/行**原地更新**（`dependencies[name] = …` 不改变键序；bundle 保留**第一次出现的位置**并去掉重复行——同一 id 两行会被 Loader 挂两次），并且**序列化结果与磁盘一致时直接不写文件**，CLI 报 `already up to date`；两个安装脚本改成原样转述编辑器的结论，不再无条件打印 `package.json updated`（那也是一句不实提示）。
 - 纯逻辑已导出（`editManifest` / `editProfileManifest` / `manifestProblem` / `serializeManifest`），守着的用例在 `self-test.mjs` 的「the profile manifest edit keeps the rows where the user put them」一节，共 7 条（含一条真的 spawn CLI 的用例）。
 
+**第四个坑：Plugins 页的卸载不会清掉 `link:` 条目（实测 pnpm 11.7.0）**
+
+- 复现（本机沙箱，真实 pnpm 11.7.0 + 真实 registry）：profile 先以 `link:` 装好（条目是 junction），再把依赖从 manifest 里去掉跑 `pnpm install` —— pnpm 打印 `- dsh-plugin-git-commit-push link:…`，接着 **`Already up to date`，条目原样留着**（目标还在的链接也留，不只是悬空链接）。桌面版 Plugins 页的卸载就是这个行为：只改 profile manifest、再跑 `pnpm install`。
+- 后果：紧接着从 npm 装同一个包（`^1.0.5`）就命中第 1 条那个 rename → **EPERM**。真实会话里正是这么发生的：15:31 Plugins 页卸载（日志 `operation-XEdbgd`），15:36 装 npm 版失败（`operation-dTrUPF`）。
+- 所以 **Plugins 页的装卸是一条绕过本仓库脚本的第三条路径**，它不会调用 `lib/profile-link.mjs`。要从 `link:` 版换成 npm 版，先跑 `setup.ps1 -Uninstall`，或手工删掉 profile 里 `node_modules/<name>` 那个条目（两个 README 都写了这条手工修复命令）。
+- 顺手证伪的三个猜测（都实测过，别再往这些方向查）：① 失败的 rename **碰不到**链接指向的 checkout —— 目标是 junction 还是普通目录，失败后目标文件一个不少（`self-test.mjs` 的 rename 前提用例守着，含 junction 目标那一项）；② 失败条件不是「目标非空」而是「目标存在」：Windows 上 rename 到**空目录**同样报 EPERM（同一条用例）；③ `Remove-Item -Recurse -Force`（Windows PowerShell 5.1）与 Git Bash 的 `rm -rf` 作用在 junction 上都只删链接本身、目标文件一个不少。
+
 其他安装事实：
 
 - `package.json` 的 `dsh.bundle.patch: ./cordis.patch.yml` 是「能被 Plugins 页管理」的唯一条件；没有它就报 `not-bundle`（「这个包没有声明组合包，不能作为插件管理」）。
@@ -152,5 +159,5 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 - **斜杠命令结果在会话窗口的可见性无法从插件侧保证**：宿主把 `command/done` 作为 log-only 事件写入，由客户端渲染（§6.1）。本仓库有用户实测「命令成功、会话窗口没有卡片」的报告，而对应 session 日志里 `command/done` 的 text 是完整的；插件侧能做的只有把返回文本做成紧凑卡片（已做）。若再次复现，先按 §6.4 解出该会话日志确认宿主是否记录了 `command/done`，再判断是客户端渲染问题还是插件问题。
 - **多族提交的固有代价**（都不是 bug，但改代码时别当成 bug 改）：① hook **每次提交跑一遍**，被拒时前面几次提交已经在本地（卡片会说明）；② `autoAdd: false` + 多族时走 git partial commit，即**按工作区**提交这些路径，不再严格按暂存区（单族时仍然是整索引提交，不受影响）；③ 调用方给的一条 `message` 只能落在**最大一族**上，其余族的标题由插件生成——这是「一条标题无法概括几个刻意不同的提交」的直接后果。
 - **未出生分支（全新 `git init`、零提交）**：`git rev-parse --abbrev-ref HEAD` 会 fatal，`currentBranch()` 因此回退到 `symbolic-ref --short HEAD`（`self-test-git.mjs` 有一条 `no HEAD yet` 用例守着）。这条曾经真的让全新仓库的首次提交整个失败——`survey()` 的 `Promise.all` 直接 reject。
-- `self-test.mjs` 里那条「rename 覆盖非空目录会失败」的检查断言的是**平台前提**，不是本仓库代码；它存在的意义是防止有人把 `lib/profile-link.mjs` 当成多余步骤删掉。
+- `self-test.mjs` 里那条「rename 覆盖非空目录会失败」的检查断言的是**平台前提**，不是本仓库代码；它存在的意义是防止有人把 `lib/profile-link.mjs` 当成多余步骤删掉。Windows 上它另外断言两件事（见 §5 第四个坑）：rename 到**空目录**同样失败，失败的 rename **不动**链接目标。
 - 中文文档（`README.md`）与英文文档（`README.en.md`）是两份手写文件，**必须同步改**；它们不在自检覆盖范围内。

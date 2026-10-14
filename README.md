@@ -97,6 +97,15 @@ pnpm 删不掉一个悬空链接，于是重试、然后报错；而那个包其
 且**绝不覆盖已存在的东西**）。这条路径是实测踩出来的：早期版本重跑一次 `setup.ps1` 会把好好的 junction
 删掉，pnpm 拒绝重建，profile 里于是**静悄悄少了这个插件**。
 
+**用 Plugins 页卸载过 `link:` 版、再从 npm 安装**：这就是最常见的触发场景。Plugins 页的卸载只改 profile
+manifest、再跑一次 `pnpm install`，而 pnpm 清一个 `link:` 依赖时会打印 `Already up to date` **并把那个条目
+留在原地**（pnpm 11.7.0 实测）——于是紧接着的 npm 安装必然撞上上面这个 EPERM。要从 `link:` 版换成 npm 版，
+先跑 `setup.ps1 -Uninstall`（macOS / Linux：`sh setup.sh --uninstall`），或者按下面的手工修复先删掉那个条目，
+再去 Plugins 页安装。
+
+这个失败**不会**破坏你的 checkout：实测 rename 失败后链接指向的文件一个不少（`self-test.mjs` 里守着这条
+平台前提）；反过来说，**报错也不代表装上了**——以 Plugins 页显示的版本与 `node_modules/<名字>` 是否为真目录为准。
+
 **手动修复**（没跑脚本、安装仍然这样失败时）：先删掉这个陈旧条目，再重试安装。
 
 ```powershell
