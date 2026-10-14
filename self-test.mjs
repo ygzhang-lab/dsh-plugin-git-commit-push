@@ -20,9 +20,10 @@
  *   & "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" self-test.mjs
  */
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import {
-  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync,
-  symlinkSync, writeFileSync,
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync,
+  symlinkSync, unlinkSync, writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { homedir, tmpdir } from 'node:os'
@@ -30,12 +31,15 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { git, parseStatusZ, tagNameError } from './lib/git.js'
-import { buildMessage, inferType, scopeOf, totalsOf, typeOfPath, declaredSymbols, removedDeclarationCount, renderCard } from './lib/analyze.js'
+import { buildMessage, inferType, planCommits, scopeOf, totalsOf, typeOfPath, declaredSymbols, removedDeclarationCount, renderCard } from './lib/analyze.js'
 import { normalizeEntries } from './lib/survey.js'
 import { ensureUserConfig, loadSettingsReport, DEFAULTS, FIELDS as SETTINGS_FIELDS, IDENTITY_FIELDS, USER_CONFIG_COMMENT } from './lib/config.js'
-import { clearStaleEntry } from './lib/profile-link.mjs'
+import { clearStaleEntry, ensureLink } from './lib/profile-link.mjs'
+import {
+  editManifest, editProfileManifest, manifestProblem, serializeManifest,
+} from './lib/profile-edit.mjs'
 import { parseSkillFile, skillDefinition, SKILL_NAME, SKILL_PATH } from './lib/skill.js'
-import { apply, applyCard, inject, COMMAND_NAME, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
+import { apply, applyCard, commitPlan, inject, COMMAND_NAME, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
 
 /**
  * Point the whole run at a throwaway DSH home, so no test can write into the
@@ -302,6 +306,116 @@ check('totalsOf sums both sides', () => {
   assert.deepEqual(totals, { added: 3, deleted: 7 })
 })
 
+console.log('\none commit per type(scope)')
+
+check('the plan is one commit per type(scope), in a deterministic order', () => {
+  const plan = planCommits({ entries: noteEntries, stats: noteStats, unifiedDiff: noteDiff })
+  // feat(api) / test(api) / docs — three keys, ordered by type and then by key.
+  assert.deepEqual(plan.groups.map(group => group.key), ['feat(api)', 'test(api)', 'docs'])
+  assert.deepEqual(plan.groups.map(group => group.subjectLine), [
+    'feat(api): 更新 decideRetry',
+    'test(api): 新增 retry.test.ts',
+    'docs: 更新文档 guide',
+  ])
+  assert.deepEqual(plan.groups[0].paths, ['src/api/retry.ts'])
+  assert.deepEqual(plan.groups[0].entries.map(entry => entry.path), ['src/api/retry.ts'])
+})
+
+check('a single-group changeset stays one commit, byte-identical to buildMessage', () => {
+  const entries = [{ status: 'M', path: 'src/api/a.ts' }, { status: 'M', path: 'src/api/b.ts' }]
+  const stats = statMap({
+    'src/api/a.ts': { added: 2, deleted: 0, binary: false },
+    'src/api/b.ts': { added: 3, deleted: 1, binary: false },
+  })
+  const plan = planCommits({ entries, stats, unifiedDiff: '' })
+  assert.equal(plan.groups.length, 1)
+  assert.equal(plan.groups[0].message, plan.message)
+  assert.equal(plan.message, buildMessage({ entries, stats, unifiedDiff: '' }).message)
+})
+
+check('a multi-file group keeps its per-file notes in its own body', () => {
+  const entries = [
+    { status: 'M', path: 'src/api/a.ts' },
+    { status: 'M', path: 'src/api/b.ts' },
+    { status: 'M', path: 'docs/g.md' },
+  ]
+  const stats = statMap({
+    'src/api/a.ts': { added: 1, deleted: 1, binary: false },
+    'src/api/b.ts': { added: 1, deleted: 1, binary: false },
+    'docs/g.md': { added: 1, deleted: 0, binary: false },
+  })
+  const plan = planCommits({ entries, stats, unifiedDiff: '' })
+  assert.deepEqual(plan.groups.map(group => group.key), ['feat(api)', 'docs'])
+  assert.match(plan.groups[0].message, /- feat\(api\): [^\n]* · src\/api\/a\.ts/)
+  assert.match(plan.groups[0].message, /- feat\(api\): [^\n]* · src\/api\/b\.ts/)
+  assert.equal(plan.groups[0].message.includes('docs/g.md'), false, 'a group body names only its own files')
+  assert.equal(plan.groups[1].message, 'docs: 更新文档 g')
+})
+
+check('a rename is committed with BOTH paths', () => {
+  // Naming only the new path would commit the addition and leave the deletion
+  // behind, so a run that reported success would hand back a dirty repository.
+  const plan = planCommits({
+    entries: [{ status: 'R', path: 'src/api/new.ts', origPath: 'src/api/old.ts' }],
+    stats: new Map(),
+    unifiedDiff: '',
+  })
+  assert.deepEqual(plan.groups[0].paths, ['src/api/old.ts', 'src/api/new.ts'])
+})
+
+check('planCommits survives an empty changeset', () => {
+  const plan = planCommits({ entries: [], stats: new Map(), unifiedDiff: '' })
+  assert.deepEqual(plan.groups, [])
+  assert.equal(typeof plan.message, 'string')
+})
+
+console.log('\nwho writes which commit')
+
+check('a supplied subject lands on the largest group, with that group\'s body', () => {
+  const draft = planCommits({
+    entries: [
+      { status: 'M', path: 'src/api/a.ts' },
+      { status: 'M', path: 'src/api/b.ts' },
+      { status: 'M', path: 'docs/g.md' },
+    ],
+    stats: statMap({
+      'src/api/a.ts': { added: 1, deleted: 1, binary: false },
+      'src/api/b.ts': { added: 1, deleted: 1, binary: false },
+      'docs/g.md': { added: 1, deleted: 0, binary: false },
+    }),
+    unifiedDiff: '',
+  })
+  const planned = commitPlan(draft, 'feat(api): 大标题')
+  assert.equal(planned.length, 2)
+  assert.match(planned[0].message, /^feat\(api\): 大标题\n\n- /)
+  assert.equal(planned[0].message.includes('· src/api/a.ts'), true)
+  // The group the caller did not write about keeps its generated message.
+  assert.equal(planned[1].message, draft.groups[1].message)
+  assert.deepEqual(planned[1].paths, draft.groups[1].paths)
+})
+
+check('one group keeps the original single-commit rules exactly', () => {
+  const entries = [{ status: 'M', path: 'src/api/a.ts' }, { status: 'M', path: 'src/api/b.ts' }]
+  const stats = statMap({
+    'src/api/a.ts': { added: 2, deleted: 0, binary: false },
+    'src/api/b.ts': { added: 2, deleted: 0, binary: false },
+  })
+  const draft = planCommits({ entries, stats, unifiedDiff: '' })
+  assert.equal(draft.groups.length, 1)
+
+  // No caller message: the generated message, and NO paths — a single commit
+  // must never turn into a partial commit of the index.
+  const generated = commitPlan(draft, undefined)
+  assert.deepEqual(generated, [{ message: draft.message }])
+
+  const subjectOnly = commitPlan(draft, 'feat(api): 标题')
+  assert.equal(subjectOnly[0].paths, undefined)
+  assert.match(subjectOnly[0].message, /^feat\(api\): 标题\n\n- /)
+
+  const verbatim = commitPlan(draft, 'feat: x\n\nBREAKING CHANGE: y')
+  assert.equal(verbatim[0].message, 'feat: x\n\nBREAKING CHANGE: y')
+})
+
 console.log('\ncard rendering')
 
 check('the preview card leads with an unmissable verdict', () => {
@@ -323,6 +437,27 @@ check('the preview card leads with an unmissable verdict', () => {
   assert.match(card, /src\/api\/retry\.ts.*→ feat\(api\): 更新 decideRetry/)
   assert.match(card, /docs\/guide\.md.*→ docs: 更新文档 guide/)
   assert.match(card, /拟定标题：/)
+})
+
+check('the preview card shows the commit plan when the changeset splits', () => {
+  const card = renderCard({
+    branch: 'main',
+    entries: noteEntries,
+    stats: noteStats,
+    recentSubjects: [],
+    version: undefined,
+    breaking: false,
+    draft: planCommits({ entries: noteEntries, stats: noteStats, unifiedDiff: noteDiff }),
+    maxFiles: 12,
+    hasUpstream: true,
+  })
+  assert.match(card, /拟定提交（共 3 次，按 type\(scope\) 拆分）：/)
+  assert.match(card, / {2}`feat\(api\): 更新 decideRetry`/)
+  assert.match(card, / {2}`docs: 更新文档 guide`/)
+  assert.equal(card.includes('拟定标题：'), false, card)
+  // The per-file line still names the file's OWN note, so a file is matched to
+  // the commit its note belongs to without a second lookup table.
+  assert.match(card, /src\/api\/retry\.ts.*→ feat\(api\): 更新 decideRetry/)
 })
 
 check('card renders without a diff or a version', () => {
@@ -411,6 +546,36 @@ check('the commit card carries counts, never a file list', () => {
 check('a one-file commit card still states the counts', () => {
   const card = commitCard({ fileCount: 1, surveyed: 1, totals: { added: 3, deleted: 0 } })
   assert.equal(card.split('\n')[1], '检查到 1 个文件改动，本次提交 1 个文件（+3 / -0）')
+})
+
+check('a multi-commit card lists the commits, never the files', () => {
+  const card = commitCard({
+    pushed: true,
+    autoPush: true,
+    commits: 3,
+    subjects: ['feat(api): 更新 retry', 'test(api): 新增 retry.test', 'docs: 更新文档 guide'],
+  })
+  const lines = card.split('\n')
+  assert.equal(lines[1], '检查到 2 个文件改动，本次提交 2 个文件（+12 / -4） · 3 次提交')
+  assert.equal(lines[2], '提交：')
+  assert.match(card, / {2}`feat\(api\): 更新 retry`/)
+  assert.match(card, /`docs: 更新文档 guide`/)
+  // The single-subject `信息：` line is replaced by the commit list; the card
+  // still carries no file list and no raw git output.
+  assert.equal(card.includes('信息：'), false, card)
+  assert.equal(/^\s+- /mu.test(card), false, 'the card must not list files')
+  assert.equal(card.includes(' · src/'), false, 'the card must not carry per-file notes')
+})
+
+check('a multi-commit card caps the list instead of becoming a process log', () => {
+  const card = commitCard({
+    pushed: true,
+    autoPush: true,
+    commits: 5,
+    subjects: ['a: 1', 'b: 2', 'c: 3', 'd: 4', 'e: 5'],
+  })
+  assert.match(card, /…另有 2 次提交/)
+  assert.equal(card.split('\n').filter(line => /^ {2}`/.test(line)).length, 3)
 })
 
 console.log('\nargument parsing (/git-commit-push)')
@@ -1093,6 +1258,172 @@ check('the cleanup refuses a target outside the profile node_modules', () => {
   try {
     assert.throws(() => clearStaleEntry(root, '../../evil'), /single path segment/u)
     assert.throws(() => clearStaleEntry(root, '..\\..\\evil'), /single path segment/u)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+check('a link that already points at this checkout is KEPT, not removed', () => {
+  // The regression this guards, measured end to end: re-running setup.ps1 used to
+  // unlink a perfectly good junction, and `pnpm install` then answered "Already
+  // up to date" WITHOUT rebuilding it (and `--force` behaved the same). The
+  // profile silently lost the plugin. Removing a healthy link is never useful.
+  const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
+  try {
+    const checkout = join(root, 'checkout')
+    mkdirSync(checkout)
+    const entry = join(root, 'node_modules', 'dsh-plugin-git-commit-push')
+    mkdirSync(join(root, 'node_modules'))
+    createLink(checkout, entry)
+
+    assert.equal(clearStaleEntry(root, 'dsh-plugin-git-commit-push', checkout), 'kept')
+    assert.equal(existsSync(entry), true, 'the entry must survive')
+
+    // A link to a DIFFERENT checkout (a moved one) is still stale, and goes.
+    const elsewhere = join(root, 'elsewhere')
+    mkdirSync(elsewhere)
+    assert.equal(clearStaleEntry(root, 'dsh-plugin-git-commit-push', elsewhere), 'removed-link')
+    assert.equal(existsSync(entry), false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+check('ensureLink fills the hole pnpm leaves, and never overwrites anything', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-profile-'))
+  try {
+    const checkout = join(root, 'checkout')
+    mkdirSync(checkout)
+    writeFileSync(join(checkout, 'index.js'), 'export {}\n')
+    const entry = join(root, 'node_modules', 'dsh-plugin-git-commit-push')
+
+    // The hole pnpm refuses to fill: cleared entry, unchanged manifest.
+    assert.equal(ensureLink(root, 'dsh-plugin-git-commit-push', checkout), 'created')
+    assert.equal(readFileSync(join(entry, 'index.js'), 'utf8'), 'export {}\n', 'the link must resolve to the checkout')
+    assert.equal(lstatSync(entry).isSymbolicLink(), true)
+
+    // Idempotent, and never a repair: an entry that exists is reported as-is.
+    assert.equal(ensureLink(root, 'dsh-plugin-git-commit-push', checkout), 'present-link')
+    unlinkSync(entry)
+    mkdirSync(entry)
+    assert.equal(ensureLink(root, 'dsh-plugin-git-commit-push', checkout), 'present')
+    assert.equal(lstatSync(entry).isSymbolicLink(), false, 'a real directory must not be replaced by a link')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+check('both installers re-link after pnpm instead of trusting it', () => {
+  // pnpm does not rebuild a `link:` entry it believes it already installed, so a
+  // step 4 removal must be followed by an explicit ensure-link.
+  for (const script of ['setup.ps1', 'setup.sh']) {
+    const text = readFileSync(join(PACKAGE_DIR, script), 'utf8')
+    assert.match(text, /--expected-target/u, `${script} must tell the cleanup which checkout it is installing`)
+    assert.match(text, /--ensure-link/u, `${script} must re-link after pnpm install`)
+  }
+})
+
+check('the profile manifest edit keeps the rows where the user put them', () => {
+  // The regression: the plugin's dependency key and its bundle row were deleted
+  // and re-appended on EVERY run, so re-running an installer shuffled the user's
+  // bundle order (which decides load order) for no reason at all.
+  const manifest = {
+    name: 'p',
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'dsh-plugin-git-commit-push', 'dsh-mnemon'] } },
+    dependencies: { a: '^1.0.0', 'dsh-plugin-git-commit-push': '^1.0.4', b: '^2.0.0' },
+  }
+  editManifest(manifest, { packageName: 'dsh-plugin-git-commit-push', linkTarget: 'D:/co' })
+
+  assert.deepEqual(manifest.dsh.profile.bundles, ['@deepseek-ai/dsh-base', 'dsh-plugin-git-commit-push', 'dsh-mnemon'])
+  assert.deepEqual(Object.keys(manifest.dependencies), ['a', 'dsh-plugin-git-commit-push', 'b'])
+  assert.equal(manifest.dependencies['dsh-plugin-git-commit-push'], 'link:D:/co')
+})
+
+check('a new profile appends the rows, and a duplicate row collapses', () => {
+  const fresh = { dsh: { profile: {} } }
+  editManifest(fresh, { packageName: 'dsh-plugin-git-commit-push', linkTarget: '/co' })
+  assert.deepEqual(fresh.dsh.profile.bundles, ['dsh-plugin-git-commit-push'])
+  assert.equal(fresh.dependencies['dsh-plugin-git-commit-push'], 'link:/co')
+
+  // Loader `insert` is append-only and does not de-duplicate: two rows with the
+  // same id would mount the plugin twice, so the first one wins and the rest go.
+  const duplicated = { dsh: { profile: { bundles: ['a', 'p', 'p', 'b'] } } }
+  editManifest(duplicated, { packageName: 'p', linkTarget: '/co' })
+  assert.deepEqual(duplicated.dsh.profile.bundles, ['a', 'p', 'b'])
+})
+
+check('a bare-string bundles field is repaired, and --remove drops both rows', () => {
+  // A single-element array can collapse to a bare string in some editors.
+  const collapsed = { dsh: { profile: { bundles: 'dsh-plugin-git-commit-push' } } }
+  editManifest(collapsed, { packageName: 'dsh-plugin-git-commit-push', linkTarget: '/co' })
+  assert.deepEqual(collapsed.dsh.profile.bundles, ['dsh-plugin-git-commit-push'])
+
+  editManifest(collapsed, { packageName: 'dsh-plugin-git-commit-push', remove: true })
+  assert.deepEqual(collapsed.dsh.profile.bundles, [])
+  assert.equal('dsh-plugin-git-commit-push' in collapsed.dependencies, false)
+})
+
+check('the manifest is written with 2-space indent, no BOM and a trailing newline', () => {
+  const text = serializeManifest({ a: 1, dsh: { profile: { bundles: [] } } })
+  assert.equal(text.startsWith('\uFEFF'), false, 'a BOM would make the profile unparseable')
+  assert.equal(text, '{\n  "a": 1,\n  "dsh": {\n    "profile": {\n      "bundles": []\n    }\n  }\n}\n')
+  assert.equal(text.endsWith('}\n'), true)
+})
+
+check('a manifest without a dsh section is refused, not guessed at', () => {
+  assert.match(String(manifestProblem({ name: 'p' })), /no dsh section/u)
+  assert.match(String(manifestProblem({ dsh: {} })), /no dsh\.profile section/u)
+  assert.match(String(manifestProblem([])), /not a JSON object/u)
+  assert.equal(manifestProblem({ dsh: { profile: {} } }), undefined)
+})
+
+check('re-running the manifest edit does not rewrite the file', () => {
+  // A second installer run must be a true no-op: identical bytes are not written
+  // again, so the profile's mtime (and anything watching it) stays put.
+  const root = mkdtempSync(join(tmpdir(), 'dsh-profile-manifest-'))
+  try {
+    const path = join(root, 'package.json')
+    writeFileSync(path, `${JSON.stringify({
+      name: 'p', dsh: { profile: { bundles: ['a', 'dsh-plugin-git-commit-push', 'b'] } }, dependencies: {},
+    }, null, 2)}\n`)
+
+    const first = editProfileManifest(root, { packageName: 'dsh-plugin-git-commit-push', linkTarget: 'D:/co' })
+    assert.equal(first.status, 'updated')
+    assert.deepEqual(first.bundles, ['a', 'dsh-plugin-git-commit-push', 'b'])
+    const afterFirst = readFileSync(path, 'utf8')
+
+    const second = editProfileManifest(root, { packageName: 'dsh-plugin-git-commit-push', linkTarget: 'D:/co' })
+    assert.equal(second.status, 'unchanged')
+    assert.equal(readFileSync(path, 'utf8'), afterFirst, 'the bytes must be untouched')
+    assert.deepEqual(second.bundles, ['a', 'dsh-plugin-git-commit-push', 'b'], 'order must survive a re-run')
+
+    const removed = editProfileManifest(root, { packageName: 'dsh-plugin-git-commit-push', remove: true })
+    assert.equal(removed.status, 'updated')
+    assert.deepEqual(removed.bundles, ['a', 'b'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+check('the manifest editor is a working CLI, and both installers call it', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-profile-cli-'))
+  try {
+    const path = join(root, 'package.json')
+    writeFileSync(path, '{\n  "dsh": {\n    "profile": {\n      "bundles": []\n    }\n  }\n}\n')
+    const script = join(PACKAGE_DIR, 'lib', 'profile-edit.mjs')
+    const runCli = extra => execFileSync(process.execPath, [
+      script, '--profile-dir', root, '--package', 'dsh-plugin-git-commit-push', '--link', 'D:/co', ...extra,
+    ], { encoding: 'utf8' })
+
+    assert.match(runCli([]), /^package\.json (created|updated) \(bundles: dsh-plugin-git-commit-push\)$/mu)
+    assert.match(runCli([]), /already up to date/u, 'the second run must say so')
+    assert.match(runCli(['--remove']), /^package\.json updated \(bundles: \)$/mu)
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')).dsh.profile.bundles, [])
+
+    for (const installer of ['setup.ps1', 'setup.sh']) {
+      const text = readFileSync(join(PACKAGE_DIR, installer), 'utf8')
+      assert.match(text, /profile-edit\.mjs/u, `${installer} must call the shared manifest editor`)
+    }
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

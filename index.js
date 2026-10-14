@@ -170,14 +170,75 @@ async function askTag(ctx, exec, tag, reasons, settings) {
 }
 
 /**
- * Stage, classify and commit.
+ * A caller subject keeps the generated per-file body; a caller body is verbatim.
  *
- * @returns {Promise<{ ok: boolean, hash?: string, subject?: string, error?: string, email?: string }>}
+ * A caller-supplied message is honored, but when it is a bare subject (no body
+ * of its own) the per-file notes of the commit it lands in are appended rather
+ * than replaced: "one message for every file" is exactly what those notes are
+ * there to avoid, and the caller usually only has an opinion about the sum.
+ */
+function withGeneratedBody(supplied, generated, fileCount) {
+  if (supplied.includes('\n') || fileCount <= 1) return supplied
+  const body = generated.split('\n').slice(1).join('\n').replace(/^\n+/u, '')
+  return body === '' ? supplied : `${supplied}\n\n${body}`
+}
+
+/**
+ * The commits this run will create, in order.
+ *
+ * ONE COMMIT PER `type(scope)` group (see `planCommits`). Two rules make the
+ * single-group case — by far the common one — behave EXACTLY as the original
+ * one-commit plugin did:
+ *
+ *   - `message`, not the group's, is the message;
+ *   - no `paths` are passed, so git is asked to commit the index as a whole
+ *     instead of doing a partial commit (`git commit -- <paths>`), which reads
+ *     the WORKING TREE for those paths and would quietly change what an
+ *     `autoAdd: false` user commits.
+ *
+ * With several groups a caller-supplied message becomes the subject of the
+ * LARGEST group (ties: the first in plan order); the other groups keep their
+ * generated subjects. There is no way to write one headline for commits that
+ * are deliberately about different things.
+ *
+ * @param {{ message: string, groups?: object[] }} draft the survey's plan
+ * @param {string | undefined} supplied a caller-supplied message
+ * @returns {{ message: string, paths?: string[] }[]}
+ */
+export function commitPlan(draft, supplied) {
+  const groups = Array.isArray(draft?.groups) ? draft.groups : []
+  const message = draft?.message ?? ''
+  const has = typeof supplied === 'string' && supplied !== ''
+
+  if (groups.length <= 1) {
+    if (!has) return [{ message }]
+    const files = groups[0]?.entries?.length ?? 0
+    return [{ message: withGeneratedBody(supplied, message, files) }]
+  }
+
+  let primary = 0
+  groups.forEach((group, index) => {
+    if ((group.entries?.length ?? 0) > (groups[primary].entries?.length ?? 0)) primary = index
+  })
+  return groups.map((group, index) => ({
+    message: index === primary && has
+      ? withGeneratedBody(supplied, group.message, group.entries?.length ?? 0)
+      : group.message,
+    paths: group.paths,
+  }))
+}
+
+/**
+ * Stage and commit — one commit per entry of `messages`.
+ *
+ * @returns {Promise<{ ok: boolean, hash?: string, subject?: string, subjects?: string[],
+ *   commits?: number, files?: number, added?: number, deleted?: number,
+ *   error?: string, done?: number, total?: number }>}
  */
 async function doCommit(ctx, exec, options) {
   const settings = options.settings
   const root = options.root
-  const message = options.message
+  const messages = options.messages
   const entries = options.entries
 
   if (settings.autoAdd) {
@@ -205,20 +266,35 @@ async function doCommit(ctx, exec, options) {
   }
   const { added, deleted } = totalsOf(stagedStats)
 
-  try {
-    await commit(root, message, settings.pinnedIdentity)
-  } catch (error) {
-    const text = brief(error)
-    // A hook rejection is reported, never bypassed: `--no-verify` is not used
-    // anywhere in this plugin.
-    return { ok: false, error: text }
+  const created = []
+  for (const item of messages) {
+    try {
+      await commit(root, item.message, settings.pinnedIdentity, item.paths)
+    } catch (error) {
+      // A hook rejection is reported, never bypassed: `--no-verify` is not used
+      // anywhere in this plugin. Already-created commits are reported as such —
+      // they are real and the caller must know the history is half written.
+      return {
+        ok: false,
+        error: brief(error),
+        done: created.length,
+        total: messages.length,
+      }
+    }
+    const hash = await headShort(root)
+    created.push({
+      ...(hash === undefined ? {} : { hash }),
+      subject: item.message.split('\n')[0],
+    })
   }
 
-  const hash = await headShort(root)
+  const last = created[created.length - 1]
   return {
     ok: true,
-    ...(hash === undefined ? {} : { hash }),
-    subject: message.split('\n')[0],
+    ...(last?.hash === undefined ? {} : { hash: last.hash }),
+    subject: created[0]?.subject,
+    subjects: created.map(item => item.subject),
+    commits: created.length,
     files: entries.length,
     added,
     deleted,
@@ -330,6 +406,8 @@ function valueOf(fields) {
     ...(fields.files === undefined ? {} : { files: fields.files }),
     ...(fields.changes === undefined ? {} : { changes: fields.changes }),
     ...(fields.hash === undefined ? {} : { hash: fields.hash }),
+    ...(fields.commits === undefined ? {} : { commits: fields.commits }),
+    ...(fields.subjects === undefined ? {} : { subjects: fields.subjects }),
     ...(fields.draft === undefined ? {} : { draft: fields.draft }),
     ...(fields.tag === undefined ? {} : { tag: fields.tag }),
     ...(fields.tagCreated === undefined ? {} : { tagCreated: fields.tagCreated }),
@@ -373,13 +451,15 @@ function prepareCard(surveyResult, settings) {
  * a real remote.
  *
  * Shape, in order: verdict line, one counts-only summary line, the commit
- * subject, the tag, the push outcome, and at most one note. It carries NO file
- * list and NO raw git output — the user asked for a result card, not a process
- * log, and the per-file notes are in the commit body where `git log` shows them.
+ * subject (or the commit LIST when this run made several), the tag, the push
+ * outcome, and at most one note. It carries NO file list and NO raw git output —
+ * the user asked for a result card, not a process log, and the per-file notes
+ * are in the commit bodies where `git log` shows them.
  */
 export function applyCard(options) {
   const {
-    branch, hash, subject, tag, tagCreated, pushed, pushedTag, note, surveyed, fileCount, totals, autoPush,
+    branch, hash, subject, subjects, commits, tag, tagCreated, pushed, pushedTag,
+    note, surveyed, fileCount, totals, autoPush,
   } = options
   const lines = []
   const verdict = pushed
@@ -389,18 +469,31 @@ export function applyCard(options) {
       : '✅ **Git 提交成功（未推送）**'
   lines.push(`${verdict} · \`${branch}\` · \`${hash ?? '?'}\``)
 
-  // The one summary line a person reads: how many files were found changed, and
-  // how many of them this commit carried. Deliberately COUNTS, not a file list —
-  // the per-file notes live in the commit body, and a result card that opens
-  // with a process log is exactly the noise this card replaced.
+  const list = (Array.isArray(subjects) ? subjects : []).filter(text => typeof text === 'string' && text !== '')
+  const count = typeof commits === 'number' && commits > 0 ? commits : Math.max(list.length, 1)
+
+  // The one summary line a person reads: how many files were found changed, how
+  // many of them this run carried, and in how many commits. Deliberately COUNTS,
+  // not a file list — the per-file notes live in the commit bodies, and a result
+  // card that opens with a process log is exactly the noise this card replaced.
   const found = surveyed === undefined ? undefined : `检查到 ${surveyed} 个文件改动`
   const landed = fileCount === undefined
     ? undefined
     : `本次提交 ${fileCount} 个文件（+${totals?.added ?? 0} / -${totals?.deleted ?? 0}）`
   const summary = [found, landed].filter(part => part !== undefined).join('，')
-  if (summary !== '') lines.push(summary)
+  if (summary !== '') lines.push(count > 1 ? `${summary} · ${count} 次提交` : summary)
 
-  lines.push(`信息：${subject}`)
+  if (count > 1 && list.length > 0) {
+    // A multi-commit run reports its commits, not its files: the subjects ARE the
+    // summary, and they are capped so a twenty-commit run cannot turn the card
+    // into the process log it replaced.
+    const MAX_LISTED = 3
+    lines.push('提交：')
+    for (const text of list.slice(0, MAX_LISTED)) lines.push(`  \`${text}\``)
+    if (list.length > MAX_LISTED) lines.push(`  …另有 ${list.length - MAX_LISTED} 次提交`)
+  } else {
+    lines.push(`信息：${subject ?? list[0] ?? ''}`)
+  }
   // The tag that is actually in play: created by this run, or already local and
   // published by it. `tagCreated` alone printed "标签：无" for the second case,
   // which is exactly how "the tag only exists locally" went unnoticed.
@@ -498,28 +591,24 @@ async function runWithSettings(ctx, request, exec, settings) {
       branch: current.branch,
       files: current.entries.length,
       changes: current.entries.map(entry => ({ status: entry.status, path: entry.path })),
-      draft: current.draft.message,
+      // The whole planned history, not one subject: a multi-group changeset is
+      // committed as several commits, and that is what the caller is previewing.
+      draft: commitPlan(current.draft, undefined).map(item => item.message).join('\n\n'),
+      commits: current.draft.groups?.length ?? 1,
     })
   }
 
-  // Who writes the body? A caller-supplied message is honored, but when it is a
-  // bare subject (no body of its own) the per-file notes are appended rather
-  // than replaced: "one message for every file" is exactly what the body is
-  // there to avoid, and the caller usually only has an opinion about the sum.
-  const supplied = request.message !== undefined && request.message !== ''
-  const generated = current.draft.message
-  let message = supplied ? request.message : generated
-  if (supplied && !request.message.includes('\n') && current.entries.length > 1) {
-    const body = generated.split('\n').slice(1).join('\n').replace(/^\n+/u, '')
-    if (body !== '') message = `${request.message}\n\n${body}`
-  }
+  // One entry per commit, in plan order; the caller's message (when it gave one)
+  // lands on the commit it actually describes. See `commitPlan`.
+  const supplied = request.message !== undefined && request.message !== '' ? request.message : undefined
+  const planned = commitPlan(current.draft, supplied)
 
   let committed
   try {
     committed = await doCommit(ctx, exec, {
       settings: effective,
       root: current.root,
-      message,
+      messages: planned,
       entries: current.entries,
     })
   } catch (error) {
@@ -530,14 +619,24 @@ async function runWithSettings(ctx, request, exec, settings) {
   }
 
   if (committed.ok !== true) {
+    const reason = committed.error ?? '未知原因'
+    // A partial failure is the one case where the card MUST be specific: some
+    // commits are already in the repository and the rest of the changeset is
+    // still in the working tree. Saying "提交失败" alone would hide a half-written
+    // history from the person who has to decide what to do next.
+    const done = typeof committed.done === 'number' ? committed.done : 0
+    const total = typeof committed.total === 'number' ? committed.total : planned.length
     return valueOf({
       ok: false,
       action: request.action,
-      card: `❌ **提交失败**（改动仍留在工作区，未推送）\n原因：${committed.error ?? '未知原因'}`,
+      card: done > 0
+        ? `❌ **提交失败（已完成 ${done}/${total} 次提交，未推送）**\n原因：${reason}`
+        : `❌ **提交失败**（改动仍留在工作区，未推送）\n原因：${reason}`,
       root: current.root,
       branch: current.branch,
+      commits: done,
       error: 'commit-failed',
-      note: committed.error,
+      note: reason,
     })
   }
 
@@ -579,7 +678,9 @@ async function runWithSettings(ctx, request, exec, settings) {
     card: applyCard({
       branch: current.branch,
       hash: committed.hash,
-      subject: committed.subject ?? message,
+      subject: committed.subject ?? planned[0]?.message.split('\n')[0] ?? '',
+      subjects: committed.subjects,
+      commits: committed.commits,
       tag: pushResult.tag,
       tagCreated: pushResult.tagCreated,
       pushed: pushResult.pushed,
@@ -594,6 +695,8 @@ async function runWithSettings(ctx, request, exec, settings) {
     branch: current.branch,
     files: committed.files,
     hash: committed.hash,
+    commits: committed.commits,
+    subjects: committed.subjects,
     tag: pushResult.tagCreated ?? tagResult.decided,
     tagCreated: pushResult.tagCreated,
     tagPushed: pushResult.tagPushed,
@@ -643,18 +746,23 @@ const TOOL_DEFINITION = {
     + '`/git-commit-push` slash command uses. '
     + 'action="prepare" is the brief survey to use ONLY when the user wants to choose the message or review the '
     + 'changeset first: verdict line, file list with per-file line '
-    + 'counts, each file\'s own Conventional-Commits note, status counts, recent commit subjects for tone, and a '
-    + 'rule-generated draft message — WITHOUT spending tokens on the diff itself. Read it, write your own '
+    + 'counts, each file\'s own Conventional-Commits note, status counts, recent commit subjects for tone, and the '
+    + 'planned commit list — WITHOUT spending tokens on the diff itself. Read it, write your own '
     + 'Conventional-Commits subject, then call action="apply" with that subject as `message`. '
-    + 'MULTI-FILE COMMITS GET ONE NOTE PER FILE: when several files changed, the commit body lists each file with its '
-    + 'own typed note (`- fix(api): correct retry decision · src/api/retry.ts`), and the notes are generated per file '
-    + 'even when you supply only a subject — supplying a message with a body of your own replaces them entirely. '
-    + 'WHEN IT IS DONE, REPORT THE CARD, NOT THE PROCESS: the returned card opens with the verdict line and carries a '
-    + 'counts-only summary, and that card is the whole user-facing report. Do not narrate the steps you took, do not '
-    + 'restate the file list, and do not paste raw git output into the conversation. '
-    + 'The plugin stages the working tree, commits, asks the user about a tag when a version bump, a possible '
-    + 'breaking change or a large changeset warrants one (the question is answered in the UI and costs no tokens), '
-    + 'and pushes, retrying once through `pull --rebase` if the remote moved. '
+    + 'MULTI-FILE CHANGESETS BECOME SEVERAL COMMITS — the changeset is split by '
+    + '`type(scope)`: every distinct Conventional-Commits type(scope) the changed files fall into is its own '
+    + 'commit, in a fixed type order, each carrying its own generated subject and, when it holds more than one '
+    + 'file, one typed note per file in its body (`- fix(api): correct retry decision · src/api/retry.ts`). '
+    + 'A changeset whose files all share one type(scope) is a single commit. When you supply a `message`, it '
+    + 'becomes the subject of the largest group and the other groups keep their generated subjects — you cannot '
+    + 'write one headline for commits that are deliberately about different things. '
+    + 'WHEN IT IS DONE, REPORT THE CARD, NOT THE PROCESS: the returned card opens with the verdict line and, for '
+    + 'a multi-commit run, lists the commit subjects (capped) instead of the file list; that card is the whole '
+    + 'user-facing report. Do not narrate the steps you took, do not restate the file list, and do not paste raw '
+    + 'git output into the conversation. '
+    + 'The plugin stages the working tree, commits (one commit per `type(scope)`), asks the user about a tag when a '
+    + 'version bump, a possible breaking change or a large changeset warrants one (the question is answered in the '
+    + 'UI and costs no tokens), and pushes, retrying once through `pull --rebase` if the remote moved. '
     + 'It never modifies .gitignore or git config, never force-pushes, and never bypasses a failing hook. '
     + 'In a directory that is not a repository it reports the child repositories instead of guessing.',
   parameters: {
@@ -718,8 +826,14 @@ const TOOL_DEFINITION = {
             },
           },
         },
-        hash: { type: 'string', description: 'Short hash of the created commit.' },
-        draft: { type: 'string', description: 'prepare only: the rule-generated Conventional Commits message.' },
+        hash: { type: 'string', description: 'Short hash of the LAST commit created (the one the tag, if any, points at).' },
+        commits: { type: 'number', description: 'How many commits this run created: one per `type(scope)` group of changed files. A changeset whose files all fall into one group is one commit.' },
+        subjects: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'The subject line of every commit created by this run, in commit order.',
+        },
+        draft: { type: 'string', description: 'prepare only: the rule-generated Conventional Commits history, one commit message after another (separated by a blank line).' },
         tag: { type: 'string', description: 'Tag that was created, or the one that was suggested.' },
         tagCreated: { type: 'string', description: 'Tag actually created locally, when one was.' },
         tagPushed: { type: 'boolean', description: 'Whether the tag (created now or already local) reached the remote. A tag can exist locally and never be published, so this is the field that answers "is the release tag out there?".' },
@@ -797,7 +911,7 @@ function registerCommand(ctx) {
     if (commands === undefined) return
     commands.register({
       name: COMMAND_NAME,
-      description: '提交并推送当前项目（Conventional Commits），可用 --prepare 仅预览、--no-push 不推送',
+      description: '提交并推送当前项目（Conventional Commits，按 type(scope) 拆成多次提交），可用 --prepare 仅预览、--no-push 不推送',
       input: { hint: '[提交信息 | --prepare | --en | --no-push | --tag=vX.Y.Z]' },
       handler: async (invocation) => {
         const request = parseCommitCommand(invocation.rawInput ?? '')

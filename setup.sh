@@ -116,14 +116,17 @@ done
 info "pre-install snapshots written as *.pre-install-$stamp"
 
 # ------------------------------------------------------- 1+2. profile manifest
+# The editor reports what it actually did — `created` / `updated` / `already up
+# to date` — so relay THAT instead of assuming it changed something: a second run
+# is a genuine no-op and saying "updated" would be a lie about the user's file.
 if [ "$uninstall" = 1 ]; then
-  "$node_bin" "$plugin_dir/lib/profile-edit.mjs" \
-    --profile-dir "$profile_dir" --package "$plugin_name" --remove || die 'manifest edit failed'
+  manifest_result=$("$node_bin" "$plugin_dir/lib/profile-edit.mjs" \
+    --profile-dir "$profile_dir" --package "$plugin_name" --remove) || die 'manifest edit failed'
 else
-  "$node_bin" "$plugin_dir/lib/profile-edit.mjs" \
-    --profile-dir "$profile_dir" --package "$plugin_name" --link "$plugin_dir" || die 'manifest edit failed'
+  manifest_result=$("$node_bin" "$plugin_dir/lib/profile-edit.mjs" \
+    --profile-dir "$profile_dir" --package "$plugin_name" --link "$plugin_dir") || die 'manifest edit failed'
 fi
-ok 'package.json updated'
+ok "$manifest_result"
 
 # ------------------------------------------------------- 3. legacy mount row
 # The mount row comes from this package's bundle patch (cordis.patch.yml), so
@@ -168,10 +171,14 @@ fi
 # The usual cause is a leftover from an install this profile no longer manages —
 # classically a `link:` symlink whose checkout has since been moved or deleted.
 # The removal lives in lib/profile-link.mjs, the same reviewed code setup.ps1
-# runs: a link is unlinked and never followed, so its checkout is untouched.
-link_outcome=$("$node_bin" "$plugin_dir/lib/profile-link.mjs" --profile-dir "$profile_dir" --package "$plugin_name") \
+# runs: a link is unlinked and never followed, so its checkout is untouched, and
+# a link that ALREADY points at this checkout is kept ("kept") rather than
+# removed — pnpm does not rebuild a missing `link:` entry, so removing a healthy
+# one would silently delete the plugin from the profile.
+link_outcome=$("$node_bin" "$plugin_dir/lib/profile-link.mjs" --profile-dir "$profile_dir" --package "$plugin_name" --expected-target "$plugin_dir") \
   || die 'clearing a stale node_modules entry failed'
 case "$link_outcome" in
+  kept) ok "node_modules/$plugin_name already links to this checkout; left alone" ;;
   removed-link) ok "removed a stale link at node_modules/$plugin_name (its checkout is untouched)" ;;
   removed-directory) ok "removed a stale directory at node_modules/$plugin_name so pnpm can import it cleanly" ;;
   *) ok "node_modules/$plugin_name: nothing stale to clear" ;;
@@ -188,6 +195,18 @@ else
   else
     warn "bundled pnpm not found at $pnpm_cli"
     warn "run this yourself to link the package:  cd '$profile_dir' && pnpm install"
+  fi
+
+  # pnpm is not authoritative about a `link:` dependency it believes it already
+  # installed: with the manifest and lockfile unchanged it answers "Already up to
+  # date" and leaves a missing entry missing (--force behaves the same). Step 4
+  # may have removed a stale link, so the hole is filled here with the entry pnpm
+  # itself creates. Without this, re-running the installer would silently DELETE
+  # the plugin from the profile.
+  if [ ! -e "$profile_dir/node_modules/$plugin_name" ]; then
+    repair=$("$node_bin" "$plugin_dir/lib/profile-link.mjs" --profile-dir "$profile_dir" --package "$plugin_name" --ensure-link "$plugin_dir") \
+      || repair=''
+    [ -n "$repair" ] && ok "node_modules/$plugin_name was not rebuilt by pnpm; linked it to this checkout ($repair)"
   fi
 
   if [ -e "$profile_dir/node_modules/$plugin_name" ]; then
@@ -212,8 +231,10 @@ else
   printf '    - command /git-commit-push  (no model involved)      [0 model tokens]\n\n'
   printf '  The plugin is a declared bundle, so Settings > Plugins can now enable,\n'
   printf '  disable and uninstall it without this script.\n\n'
-  printf '  Settings: %s\n' "$plugin_dir/git-commit-push.config.json"
-  printf '            (edit the JSON file; the plugin has no settings form)\n'
+  printf '  Settings: %s   <-- edit this one\n' "$dsh_home/git-commit-push.config.json"
+  printf '            (created on first mount; the plugin has no settings form)\n'
+  printf '            The file inside the package (%s/git-commit-push.config.json)\n' "$plugin_dir"
+  printf '            is only the shipped template, replaced on every update.\n'
   printf '  Backups : %s\n\n' "$manifest.git-commit-plugin.bak"
   printf '  If the Plugins page reports ERR_PNPM_EPERM while installing this\n'
   printf '  package, an earlier install left node_modules/%s behind\n' "$plugin_name"

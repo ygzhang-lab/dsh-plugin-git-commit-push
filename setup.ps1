@@ -128,9 +128,14 @@ $editArgs = @(
 )
 if ($Uninstall) { $editArgs += '--remove' } else { $editArgs += @('--link', $pluginDir) }
 
-& $nodeExe @editArgs
+# The editor reports what it actually did — `created` / `updated` / `already up
+# to date` — so relay THAT instead of assuming it changed something: a second run
+# is a genuine no-op and printing "package.json updated" would misdescribe the
+# user's file. Only stdout is captured; a failure writes to stderr and is caught
+# by the exit code below.
+$editOutput = (& $nodeExe @editArgs | Out-String).Trim()
 if ($LASTEXITCODE -ne 0) { throw "profile manifest edit failed with exit code $LASTEXITCODE" }
-Write-Ok 'package.json updated'
+Write-Ok $editOutput
 
 # The plugin is mounted by the bundle patch this package ships
 # (cordis.patch.yml, declared as dsh.bundle.patch). Nothing is written into the
@@ -177,9 +182,10 @@ if ($existingBlock.Success) {
 # The removal itself lives in lib/profile-link.mjs, the same reviewed code
 # setup.sh runs: a link is UNLINKED and never followed, so the checkout it points
 # at keeps every file. See that file for the measurements behind this.
-$linkOutcome = & $nodeExe "$pluginDir\lib\profile-link.mjs" --profile-dir $profileDir --package $pluginName
+$linkOutcome = & $nodeExe "$pluginDir\lib\profile-link.mjs" --profile-dir $profileDir --package $pluginName --expected-target $pluginDir
 if ($LASTEXITCODE -ne 0) { throw "clearing a stale node_modules entry failed with exit code $LASTEXITCODE" }
 switch ($linkOutcome) {
+  'kept' { Write-Ok "node_modules\$pluginName already links to this checkout; left alone" }
   'removed-link' { Write-Ok "removed a stale link at node_modules\$pluginName (its checkout is untouched)" }
   'removed-directory' { Write-Ok "removed a stale directory at node_modules\$pluginName so pnpm can import it cleanly" }
   default { Write-Ok "node_modules\${pluginName}: nothing stale to clear" }
@@ -204,9 +210,17 @@ try {
 if ($pnpmExit -ne 0) { throw "pnpm install failed with exit code $pnpmExit" }
 Write-Ok 'package linked into the profile'
 
-# --- 6. Verify -------------------------------------------------------------
-# On uninstall the linked directory is expected to be gone (cleared in step 4,
-# then pruned by pnpm in step 5); reporting that as a warning would read like a
+# --- 6. Verify (and repair) the link ---------------------------------------
+# pnpm is NOT authoritative about a `link:` dependency it believes it already
+# installed: with the manifest and the lockfile unchanged it prints "Already up
+# to date" and leaves a missing entry missing — measured, and `--force` behaves
+# the same. Since step 4 may have removed a stale link, the hole is filled here
+# with the entry pnpm itself would have created (lib/profile-link.mjs never
+# overwrites anything that exists). Without this, re-running the installer would
+# silently DELETE the plugin from the profile.
+#
+# On uninstall the directory is expected to be gone (cleared in step 4, then
+# pruned by pnpm in step 5); reporting that as a warning would read like a
 # failure.
 $linkedModule = Join-Path $profileDir "node_modules\$pluginName"
 if ($Uninstall) {
@@ -218,7 +232,12 @@ if ($Uninstall) {
 } elseif (Test-Path -LiteralPath $linkedModule) {
   Write-Ok "module present at node_modules\$pluginName"
 } else {
-  Write-Warn2 "node_modules\$pluginName is missing; the profile will not find the plugin"
+  $repair = & $nodeExe "$pluginDir\lib\profile-link.mjs" --profile-dir $profileDir --package $pluginName --ensure-link $pluginDir
+  if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $linkedModule)) {
+    Write-Ok "node_modules\$pluginName was not rebuilt by pnpm; linked it to this checkout ($repair)"
+  } else {
+    Write-Warn2 "node_modules\$pluginName is missing; the profile will not find the plugin"
+  }
 }
 
 if (-not $Uninstall) {
@@ -236,8 +255,10 @@ if (-not $Uninstall) {
   Write-Host '  enable, disable and uninstall it without this script.' -ForegroundColor Gray
   Write-Host ''
   Write-Host '  Settings live in:' -ForegroundColor Gray
-  Write-Host "    $(Join-Path $pluginDir 'git-commit-push.config.json')" -ForegroundColor Gray
-  Write-Host '    (edit the JSON file; the plugin has no settings form)' -ForegroundColor Gray
+  Write-Host "    $(Join-Path $dshHome 'git-commit-push.config.json')   <-- edit this one" -ForegroundColor Gray
+  Write-Host '    (created on first mount; the plugin has no settings form)' -ForegroundColor Gray
+  Write-Host "    The file inside the package ($pluginDir\git-commit-push.config.json)" -ForegroundColor Gray
+  Write-Host '    is only the shipped template and is replaced on every update.' -ForegroundColor Gray
   Write-Host ''
   Write-Host '  If the Plugins page reports ERR_PNPM_EPERM while installing this' -ForegroundColor Gray
   Write-Host '  package, an earlier install left node_modules\dsh-plugin-git-commit-push' -ForegroundColor Gray

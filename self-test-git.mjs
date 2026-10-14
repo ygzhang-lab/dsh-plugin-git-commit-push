@@ -375,30 +375,122 @@ await check('the commit card reports the real line counts', async () => {
   }
 })
 
-await check('a multi-file commit lands as ONE commit with one note per file', async () => {
-  const repo = createFixtureRepo('git-commit-notes-')
+await check('a changeset is split into one commit per type(scope) group', async () => {
+  // The contract: per-file Conventional notes are not piled into one commit's
+  // body — each distinct type(scope) becomes its own commit, in a fixed order.
+  const repo = createFixtureRepo('git-commit-plan-')
   try {
     repo.write('src/api/retry.js', 'export function decideRetry(n) { return n < 3 }\n')
+    repo.write('src/util/helper.js', 'export function parseHelper(input) { return input }\n')
     repo.write('docs/guide.md', '# guide\n')
-    repo.git(['add', '-A'])
-    repo.git(['-c', 'user.email=t@example.com', '-c', 'user.name=T', 'commit', '-qm', 'init'])
-    // One modified file that declares something, one new documentation file.
+    repo.commitAll('chore: base')
     repo.write('src/api/retry.js', 'export function decideRetry(n) { return n < 5 }\n')
-    repo.write('docs/retry.md', '# retry\n')
+    repo.write('src/util/helper.js', 'export function parseHelper(input) { return String(input) }\n')
+    repo.write('docs/guide.md', '# guide\n\nRetry twice.\n')
     const before = Number(repo.git(['rev-list', '--count', 'HEAD']).trim())
 
     const result = await run({ get: () => undefined }, { action: 'auto', push: false, cwd: repo.dir }, undefined)
     assert.equal(result.ok, true, `auto failed: ${result.card}`)
+    assert.equal(result.commits, 3, String(result.card))
 
     const after = Number(repo.git(['rev-list', '--count', 'HEAD']).trim())
-    assert.equal(after, before + 1, 'the notes must not become separate commits')
+    assert.equal(after, before + 3, 'one commit per type(scope) group')
+
+    // Deterministic order, newest first: feat before docs, feat groups by key.
+    const subjects = repo.git(['log', '-n', '3', '--pretty=format:%s']).trim().split('\n')
+    assert.deepEqual(subjects, [
+      'docs: 更新文档 guide',
+      'feat(util): 更新 parseHelper',
+      'feat(api): 更新 decideRetry',
+    ])
+
+    // A one-file group is a subject-only commit: the per-file notes of a
+    // MULTI-file commit are what the body is for, and this commit has one file.
+    assert.equal(repo.git(['log', '-n', '1', '--pretty=format:%B']).trim(), 'docs: 更新文档 guide')
+
+    // Nothing may be left behind: the run promised to commit the changeset.
+    assert.equal(repo.git(['status', '--porcelain']).trim(), '')
+
+    // The card lists the commits, never the files.
+    assert.match(String(result.card), /本次提交 3 个文件（\+\d+ \/ -\d+） · 3 次提交/, String(result.card))
+    assert.match(String(result.card), /提交：/)
+    assert.match(String(result.card), /`feat\(api\): 更新 decideRetry`/)
+    assert.equal(/^\s+- /mu.test(String(result.card)), false, String(result.card))
+  } finally {
+    repo.cleanup()
+  }
+})
+
+await check('files that share one type(scope) stay in ONE commit, with one note each', async () => {
+  // The other side of the split: grouping must not fragment a coherent change.
+  const repo = createFixtureRepo('git-commit-same-scope-')
+  try {
+    repo.write('src/api/a.js', 'export const a = 1\n')
+    repo.write('src/api/b.js', 'export const b = 1\n')
+    repo.commitAll('chore: base')
+    repo.write('src/api/a.js', 'export const a = 2\n')
+    repo.write('src/api/b.js', 'export const b = 2\n')
+    const before = Number(repo.git(['rev-list', '--count', 'HEAD']).trim())
+
+    const result = await run({ get: () => undefined }, { action: 'auto', push: false, cwd: repo.dir }, undefined)
+    assert.equal(result.ok, true, `auto failed: ${result.card}`)
+    assert.equal(result.commits, 1, String(result.card))
+    assert.equal(Number(repo.git(['rev-list', '--count', 'HEAD']).trim()), before + 1)
+
     const body = repo.git(['log', '-1', '--pretty=format:%B'])
-    const lines = body.split('\n')
-    assert.match(lines[0], /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)/, body)
-    assert.equal(lines[1], '', 'subject and body are separated by a blank line')
-    assert.match(body, /- [^\n]*decideRetry[^\n]* · src\/api\/retry\.js/, body)
-    assert.match(body, /- [^\n]* · docs\/retry\.md/, body)
-    assert.equal(lines.filter(line => line.startsWith('- ')).length, 2, body)
+    assert.match(body.split('\n')[0], /^feat\(api\): /, body)
+    assert.match(body, /- feat\(api\): [^\n]* · src\/api\/a\.js/, body)
+    assert.match(body, /- feat\(api\): [^\n]* · src\/api\/b\.js/, body)
+    // A one-group run keeps the original single-commit card shape.
+    assert.match(String(result.card), /信息：feat\(api\): /, String(result.card))
+  } finally {
+    repo.cleanup()
+  }
+})
+
+await check('a rename and a deletion travel in their own group and leave no residue', async () => {
+  // A rename carries TWO paths. Naming only the new one would commit the
+  // addition and leave the old path's deletion in the working tree, so a run
+  // that reported success would hand back a dirty repository.
+  const repo = createFixtureRepo('git-commit-rename-')
+  try {
+    repo.write('src/api/old.js', 'export function oldThing() { return 1 }\n')
+    repo.write('src/util/dropped.js', 'export const dropped = 1\n')
+    repo.write('docs/guide.md', '# guide\n')
+    repo.commitAll('chore: base')
+    repo.git(['mv', 'src/api/old.js', 'src/api/new.js'])
+    repo.remove('src/util/dropped.js')
+    repo.write('docs/guide.md', '# guide\n\nMore.\n')
+
+    const result = await run({ get: () => undefined }, { action: 'auto', push: false, cwd: repo.dir }, undefined)
+    assert.equal(result.ok, true, `auto failed: ${result.card}`)
+    assert.equal(result.commits, 3, String(result.card))
+    assert.equal(repo.git(['status', '--porcelain']).trim(), '', 'the run must leave nothing behind')
+
+    const names = repo.git(['log', '-n', '3', '--name-status', '--pretty=format:%s'])
+    assert.match(names, /^R\d*\tsrc\/api\/old\.js\tsrc\/api\/new\.js$/mu, names)
+    assert.match(names, /^D\tsrc\/util\/dropped\.js$/mu, names)
+    const subjects = repo.git(['log', '-n', '3', '--pretty=format:%s']).trim().split('\n')
+    assert.deepEqual(subjects.map(line => line.split(':')[0]), ['docs', 'refactor(util)', 'feat(api)'])
+  } finally {
+    repo.cleanup()
+  }
+})
+
+await check('a first commit split into groups still works with no HEAD yet', async () => {
+  // With an unborn branch there is no parent to diff against and no `HEAD` for
+  // the staged numstat, so this is the one path where a partial commit runs
+  // against an empty repository.
+  const repo = createFixtureRepo('git-commit-unborn-')
+  try {
+    repo.git(['update-ref', '-d', 'refs/heads/main'])
+    repo.write('src/api/a.js', 'export function a() { return 1 }\n')
+    repo.write('docs/guide.md', '# guide\n')
+    const result = await run({ get: () => undefined }, { action: 'auto', push: false, cwd: repo.dir }, undefined)
+    assert.equal(result.ok, true, `auto failed: ${result.card}`)
+    assert.equal(result.commits, 2, String(result.card))
+    assert.equal(repo.git(['status', '--porcelain']).trim(), '')
+    assert.equal(Number(repo.git(['rev-list', '--count', 'HEAD']).trim()), 2)
   } finally {
     repo.cleanup()
   }
@@ -557,6 +649,35 @@ await check('with no upstream yet, branch and tag go out in one command', async 
   } finally {
     repo.cleanup()
     rmSync(bareRoot, { recursive: true, force: true })
+  }
+})
+
+await check('a multi-commit run tags HEAD, not the first commit of the run', async () => {
+  const fixture = createRepoWithRemote('git-commit-tag-multi-')
+  try {
+    fixture.repo.write('src/api/a.js', 'export const a = 1\n')
+    fixture.repo.write('docs/guide.md', '# guide\n')
+    fixture.repo.commitAll('chore: base')
+    fixture.repo.git(['push', '-q', 'origin', 'main'])
+    fixture.repo.write('src/api/a.js', 'export const a = 2\n')
+    fixture.repo.write('docs/guide.md', '# guide\n\nMore.\n')
+
+    const result = await run({ get: () => undefined }, {
+      action: 'auto', push: true, tag: 'v9.9.9', cwd: fixture.repo.dir,
+    }, undefined)
+
+    assert.equal(result.ok, true, `auto failed: ${result.card}`)
+    assert.equal(result.commits, 2, String(result.card))
+    assert.equal(result.tagPushed, true, String(result.card))
+    assert.deepEqual(fixture.remoteTags(), ['v9.9.9'])
+    assert.equal(
+      fixture.repo.git(['rev-parse', 'v9.9.9^{commit}']).trim(),
+      fixture.repo.git(['rev-parse', 'HEAD']).trim(),
+      'the tag must point at the last commit of the run',
+    )
+    assert.equal(fixture.repo.git(['log', '-1', '--pretty=format:%s']).trim(), 'docs: 更新文档 guide')
+  } finally {
+    fixture.cleanup()
   }
 })
 
