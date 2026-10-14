@@ -36,17 +36,12 @@
     "prepublishOnly": "node self-test.mjs && node self-test-git.mjs"
   },
   "keywords": [
+    "deepseek-harness",
     "dsh",
     "dsh-plugin",
-    "deepseek",
-    "deepseek-harness",
-    "cordis-plugin",
-    "git",
-    "commit",
-    "push",
-    "conventional-commits",
-    "tag",
-    "agent"
+    "dsh-git",
+    "dsh-git-commit",
+    "dsh-git-push"
   ],
   "author": "ygzhang <ygzhang.cn@msn.com>",
   "license": "MIT",
