@@ -2,10 +2,10 @@
 
 English | [中文](README.md)
 
-DSH (DeepSeek Harness) Git commit and push plugin, one call to complete: summarize changes, automatically generate commit messages for each changed file according to Conventional Commits, ask for tagging if necessary, and then push to the Git remote repository configured for the current project.
+DSH (DeepSeek Harness) Git commit and push plugin, one call to complete: summarize changes, automatically generate commit messages for each changed file according to Conventional Commits, **split them into several commits by `type(scope)`**, ask for tagging if necessary, and then push to the Git remote repository configured for the current project.
 
--  Users can complete a commit and push with just a 0 Token through the `/git-commit-push` slash command (without going through the model, as the script automatically generates simple and clear commits according to the rules);
--  DSH can utilize the `git_commit_push` tool, requiring minimal tokens to accomplish high-quality annotations and complete a single commit and push.
+-  Users can complete a commit and push with just a 0 Token through the `/git-commit-push` slash command (without going through the model, as the script automatically generates simple and clear commits according to the rules, split into several commits by `type(scope)`);
+-  DSH can utilize the `git_commit_push` tool, requiring minimal tokens to accomplish high-quality annotations, a `type(scope)`-split commit series and one push.
   This plugin serves as a tool-based replacement for the earlier `.agents/skills/git-commit-push` Skill. It condenses the process of running dozens of Shell scripts and reading through a pile of raw Git output, which is typically required for pure Skill work, into **1-2 tool invocations + a compact card**.
 
 Installing gives you three surfaces:
@@ -92,7 +92,17 @@ restart.
 reviewed [`lib/profile-link.mjs`](./lib/profile-link.mjs) — a link is unlinked, never followed, so the
 checkout it points at is untouched (the same module also runs under `--uninstall`).
 
-**Manual repair**, if an install fails this way without the script: delete the stale directory and retry.
+**Never delete a healthy link**: pnpm does **not** rebuild a `link:` entry it believes is already
+installed — with the manifest and lockfile unchanged, `pnpm install` just prints `Already up to date` and
+stops, and `--force` behaves the same (measured here). So `lib/profile-link.mjs` first asks whether the
+existing link already points at the checkout being installed: it returns `kept` and leaves it alone. Only
+after a real removal (a dangling link, a link to another checkout, a stale directory) do the installers
+fill the hole with `--ensure-link` once `pnpm install` has run — creating exactly the entry pnpm itself
+creates, and **never overwriting anything that exists**. This path was found the hard way: an earlier
+revision unlinked a perfectly good junction on a second run, pnpm refused to rebuild it, and the profile
+**silently lost the plugin**.
+
+**Manual repair**, if an install fails this way without the script: delete the stale entry and retry.
 
 ```powershell
 # Windows
@@ -102,6 +112,23 @@ Remove-Item -LiteralPath "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\ds
 ```bash
 # macOS / Linux
 rm -rf ~/.dsh/profiles/desktop/node_modules/dsh-plugin-git-commit-push
+```
+
+If `pnpm install` then still reports `Already up to date` **without rebuilding the entry** (the pnpm
+behaviour above), re-create the link with the same module — it creates exactly what pnpm would, and never
+overwrites anything that already exists:
+
+```powershell
+# Windows: replace <checkout> with your source directory
+& "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" `
+  "<checkout>\lib\profile-link.mjs" --profile-dir "$env:USERPROFILE\.dsh\profiles\desktop" `
+  --package dsh-plugin-git-commit-push --ensure-link "<checkout>"
+```
+
+```bash
+# macOS / Linux
+node "<checkout>/lib/profile-link.mjs" --profile-dir ~/.dsh/profiles/desktop \
+  --package dsh-plugin-git-commit-push --ensure-link "<checkout>"
 ```
 
 ### A new version is published, but the Plugins page will not upgrade (pnpm's release-age policy)
@@ -182,9 +209,9 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # session cwd is 
 ```
 
 A plain "commit and push" is **one** call: `action="auto"` (the slash command takes the same path and lets the
-plugin write the message by rule). `prepare` + `apply` is only worth it when the **user wants to choose the
-subject**, or wants to review the changes first: `prepare` returns the file list, each file's draft note and a
-candidate subject, and you decide the subject after reading it.
+plugin write the messages by rule, split into one commit per `type(scope)`). `prepare` + `apply` is only worth it
+when the **user wants to choose the subject**, or wants to review the changes first: `prepare` returns the file list,
+each file's draft note and **the commits this run will create**, and you decide the subject after reading it.
 
 `/git-commit-push` variants (**0 tokens, no model involved**):
 `/git-commit-push`, `/git-commit-push --prepare`, `/git-commit-push --no-push`, `/git-commit-push --en`, `/git-commit-push --tag=v1.2.3`, `/git-commit-push fix login timeout`.
@@ -202,23 +229,31 @@ status: 1 added / 1 modified / 1 deleted
   deleted  src/old.ts → refactor: remove old
 tag evidence: version 1.2.3 → 1.2.4 (package.json)
 recent style: "feat(ui): add theme switch" "fix(api): correct retry decision"
-subject: `feat(foo): update bar component`
+拟定提交（共 3 次，按 type(scope) 拆分）：
+  `feat(foo): 更新 bar 组件`
+  `fix(foo): 修正 parseThing 判断`
+  `refactor: 移除 old`
 (preview only — nothing committed, nothing pushed)
 ```
 
-And after a commit (the result card is only the verdict, one counts summary and `信息` / `标签` / `推送`, plus at
-most one `说明：` line):
+And after a commit (the result card is only the verdict, one counts summary, the commit list or single
+`信息` line, `标签` / `推送`, plus at most one `说明：` line):
 
 ```
 ✅ **Git 提交并推送成功** · `main` · `a1b2c3d`
-检查到 3 个文件改动，本次提交 3 个文件（+48 / -12）
-信息：feat(foo): 更新 bar 组件
+检查到 3 个文件改动，本次提交 3 个文件（+48 / -12） · 3 次提交
+提交：
+  `feat(foo): 更新 bar 组件`
+  `fix(foo): 修正 parseThing 判断`
+  `refactor: 移除 old`
 标签：v1.2.4
 推送：已推送（含标签）
 ```
 
-The result card **no longer lists the per-file notes**: those notes stay in the **commit body**, where `git log`
-shows them (next section). The card exists so a person can confirm the work landed; it is not a process log.
+The result card **no longer lists the per-file notes**: those notes stay in the body of **their own** commit, where
+`git log` shows them (next section). The card exists so a person can confirm the work landed; it is not a process log.
+A multi-commit run lists at most 3 subjects and collapses the rest into `…另有 N 次提交`; a single-commit run keeps
+the original one-line `信息：<subject>` shape.
 
 Four outcomes are unmistakable, so a card can no longer be mistaken for "nothing happened":
 
@@ -232,28 +267,41 @@ Four outcomes are unmistakable, so a card can no longer be mistaken for "nothing
 Other states: `ℹ️ **没有需要提交的改动**`, `⚠️ **当前目录不是 Git 仓库**` (with the candidate repositories listed),
 `❌ **未初始化 Git**`, `❌ **找不到 git**`.
 
-### Multiple files: one commit, one note per file in the commit body
+### Multiple files: one commit per `type(scope)`
 
-Several files are still **one commit**, but its **body** carries one typed Conventional note per file instead of a single
-sentence pretending to cover all of them:
+Every file first gets **its own** Conventional note (type, scope and symbol all come from that file: `docs/` →
+`docs:`, `*.test.ts` → `test:`, a scope that would only repeat the type is dropped so `docs(docs)` never appears).
+The files are then **grouped by the `type(scope)` in those notes, and every distinct `type(scope)` becomes its own commit**:
 
 ```
-feat(api): 更新 decideRetry
+feat(foo): 更新 bar 组件
 
-- feat(api): 更新 decideRetry · src/api/retry.ts
-- docs: 更新文档 guide · docs/guide.md
-- test(api): 新增 retry.test.ts · src/api/retry.test.ts
+fix(foo): 修正 parseThing 判断
+
+refactor: 移除 old
 ```
 
-- Those notes live in the **commit body** (`git log` shows them); the result card only carries the counts summary
-  and never repeats them.
-- Every note describes **that one file**: the type comes from the file itself (`docs/` → `docs:`, `*.test.ts` →
-  `test:`), the scope is its directory (dropped when it would only repeat the type, so `docs(docs)` never appears),
-  and the summary prefers a symbol the file's own diff declares (`update decideRetry`).
-- Supply only a **subject** (a single-line `message`) and the per-file notes are appended for you; supply your own
-  body (a multi-line `message`) and it is used **verbatim**, with no generated notes added.
-- A **single-file commit has no body** — its subject says it all.
-- The body names at most `maxFilesShown` files (12 by default); the rest collapse into `- …另有 N 个文件`.
+- **The commit order is fixed**: `feat` → `fix` → `refactor` → `perf` → `test` → `docs` → `style` → `build` →
+  `ci` → `chore`, then by scope. The same changeset always produces the same history.
+- **Files sharing one `type(scope)` stay in ONE commit**: `src/api/a.ts` and `src/api/b.ts` are both `feat(api)`,
+  so they land together — and that commit's **body** is where the per-file notes go:
+
+  ```
+  feat(api): 更新 a、b
+
+  - feat(api): 更新 a · src/api/a.ts
+  - feat(api): 更新 b · src/api/b.ts
+  ```
+
+- A commit holding **one file has no body** — its subject says it all; under one group the body names at most
+  `maxFilesShown` files (12 by default) and the rest collapse into `- …另有 N 个文件`.
+- The push happens **once**, after every commit of the run; a tag points at the **last** commit (HEAD).
+- Conflict handling and the hook policy are unchanged — but note that a hook now runs **once per commit**: if one
+  group is rejected, the commits already made stay local and **nothing is pushed**, and the card says
+  `已完成 N/M 次提交，未推送`.
+- Supply only a **subject** (a single-line `message`) and it becomes the subject of the **largest group** (ties: the
+  first group in plan order); the other groups keep their generated subjects. Supply your own body (a multi-line
+  `message`) and it is used **verbatim**, with no generated notes added.
 
 (Message text is localized: `defaultLanguage: "zh"` or `"en"` — the rule-generated subject and the per-file notes
 in the commit body. The card _format_ is Chinese-and-English-mixed by design: the verdict line and the labels are
@@ -404,8 +452,8 @@ directory and delete them):
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # pure logic + packaging/config/skill contracts (91 checks)
-node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit, per-file notes, card verdicts (28 checks)
+node self-test.mjs              # pure logic + packaging/config/skill contracts (111 checks)
+node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit, type(scope) commit splitting, tag publishing, card verdicts (32 checks)
 node capture-git-format.mjs     # prints raw git -z bytes, for diagnosing framing
 ```
 
@@ -446,7 +494,10 @@ The last few sections of `self-test.mjs` check **packaging and runtime contracts
 - **the premise of the `ERR_PNPM_EPERM` fix**: first that a rename onto an existing non-empty directory really
   fails on this platform, then that `lib/profile-link.mjs` unlinks a link without touching the checkout it
   points at, handles a stale directory and an absent entry, refuses a target outside `node_modules`, and that
-  both installers run it instead of carrying a copy;
+  both installers run it instead of carrying a copy — plus two checks that re-running an installer can never
+  delete the plugin: a link that already points at the checkout being installed must come back `kept`, and
+  `ensureLink` must fill only a hole (never replacing anything that exists) while both scripts pass
+  `--expected-target` and `--ensure-link`;
 - the skill definition parsed from SKILL.md satisfies the registry's `validateRuntimeSkill` rules, and
   `apply()` on a mock host really registers the tool, the command and the skill.
 
@@ -467,12 +518,12 @@ lib/analyze.js           change classification + rule-based Conventional Commits
 lib/survey.js            one repository survey: status / numstat / log / bounded diff
 lib/config.js            settings + the field table: user file > template > defaults, and reporting a broken file
 lib/skill.js             parses SKILL.md into the runtime skill definition (frontmatter included)
-lib/profile-edit.mjs     profile manifest editor shared by both installers (idempotent, keeps unknown fields, no BOM, self-verifying)
-lib/profile-link.mjs     stale node_modules entry remover shared by both installers (unlinks a link, never follows it, so ERR_PNPM_EPERM cannot recur)
+lib/profile-edit.mjs     profile manifest editor shared by both installers (idempotent, keeps unknown fields AND row positions, no BOM, does not rewrite an unchanged file, self-verifying)
+lib/profile-link.mjs     node_modules entry manager shared by both installers: stale-entry removal (unlinks a link, never follows it, so ERR_PNPM_EPERM cannot recur) plus `ensureLink`, which fills the `link:` entry pnpm refuses to rebuild
 setup.ps1                Windows install / uninstall (path C)
 setup.sh                 macOS / Linux install / uninstall (path C)
-self-test.mjs            pure logic + packaging/config contracts (91 checks)
-self-test-git.mjs        real-git integration (24 checks, own temporary repository)
+self-test.mjs            pure logic + packaging/config contracts (111 checks)
+self-test-git.mjs        real-git integration (32 checks, own temporary repository)
 capture-git-format.mjs   prints raw git -z bytes (framing diagnostics)
 e2e-check.mjs            calls run() directly, to verify the commit path without restarting DSH
 ```

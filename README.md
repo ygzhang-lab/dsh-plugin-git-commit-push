@@ -1,10 +1,10 @@
 # dsh-plugin-git-commit-push
 
 [English](README.en.md) | 中文
-DSH（DeepSeek Harness） 0 Token Git 提交推送插件，一次调用完成：汇总改动，按 Conventional Commits 为每个变更文件自动生成提交信息，必要时询问打标签，然后推送到当前项目配置的 Git 远程仓库。
+DSH（DeepSeek Harness） 0 Token Git 提交推送插件，一次调用完成：汇总改动，按 Conventional Commits 为每个变更文件自动生成提交信息，**按 `type(scope)` 拆成多次提交**后一次推送到Git，必要时询问打标签，然后推送到当前项目配置的 Git 远程仓库。
 
--  通过 `/git-commit-push` 斜杠命令使用, 0 Token 即可完成一次提交与推送(不经过模型，脚本自动按规则生成简单明了的 Commits )；
--  通过 `git_commit_push` 工具调用, 极少 Token 即可完成高质量的注释和一次提交与推送。
+-  通过 `/git-commit-push` 斜杠命令使用, 0 Token 即可完成提交与推送(不经过模型，脚本自动按规则生成简单明了的 Commits，并按 `type(scope)` 拆成多次提交 )；
+-  通过 `git_commit_push` 工具调用, 极少 Token 即可完成高质量的注释和按 `type(scope)` 拆分的多次提交与一次推送。
 
 本插件是早期 `.agents/skills/git-commit-push` 这个 Skill 的工具化替代，把纯 Skill 工作需要模型跑十来条 Shell，读一堆 Git 原始输出的流程，压成 **1–2 次工具调用 + 一张紧凑卡片**。
 
@@ -39,9 +39,9 @@ dsh plugin --profile <profile> add dsh-plugin-git-commit-push
 dsh plugin --profile web add dsh-plugin-git-commit-push
 ```
 > 卸载
-dsh plugin --profile web remove dsh-plugin-git-commit-push  
+dsh plugin --profile <profile> remove dsh-plugin-git-commit-push  
 ```sh
-dsh plugin --profile <profile> remove dsh-plugin-git-commit-push 
+dsh plugin --profile web remove dsh-plugin-git-commit-push 
 ```
 `<profile>` 是你的 profile 名（如 `web`、`headless`、自定义名）。装/卸都会改 profile 的
 `package.json`（依赖 + `dsh.profile.bundles`），**需要重启 DSH** 才生效。
@@ -89,7 +89,15 @@ pnpm 删不掉一个悬空链接，于是重试、然后报错；而那个包其
 共用的、经过审查的 [`lib/profile-link.mjs`](./lib/profile-link.mjs)——链接只会被 unlink，绝不被跟随，
 所以它指向的 checkout 一个文件都不会少（同一个模块在 `--uninstall` 时也会跑）。
 
-**手动修复**（没跑脚本、安装仍然这样失败时）：删掉这个陈旧目录再重试。
+**别删掉一个还好的链接**：pnpm **不会**重建一个它认为已经装好的 `link:` 条目——manifest 与 lockfile
+都没变时，`pnpm install` 只会说 `Already up to date` 就结束，`--force` 也一样（本机实测）。所以
+`lib/profile-link.mjs` 现在会先判断「这个链接是不是已经指向本次要装的那份 checkout」，是就返回
+`kept` 原样留着；只有在真正清掉了条目（悬空链接 / 指向别的 checkout / 陈旧目录）之后，安装脚本才会在
+`pnpm install` 之后用 `--ensure-link` 把那个洞补上（补出来的就是 pnpm 自己会建的那种 junction/symlink，
+且**绝不覆盖已存在的东西**）。这条路径是实测踩出来的：早期版本重跑一次 `setup.ps1` 会把好好的 junction
+删掉，pnpm 拒绝重建，profile 里于是**静悄悄少了这个插件**。
+
+**手动修复**（没跑脚本、安装仍然这样失败时）：先删掉这个陈旧条目，再重试安装。
 
 ```powershell
 # Windows
@@ -99,6 +107,22 @@ Remove-Item -LiteralPath "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\ds
 ```bash
 # macOS / Linux
 rm -rf ~/.dsh/profiles/desktop/node_modules/dsh-plugin-git-commit-push
+```
+
+删掉之后 `pnpm install` 若仍报 `Already up to date` 而**不重建条目**（上面那条 pnpm 行为），用同一模块
+显式把链接补回来——它补出来的就是 pnpm 自己会建的那种 junction/symlink，且**绝不覆盖已存在的东西**：
+
+```powershell
+# Windows：<checkout> 替换成你的源码目录
+& "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" `
+  "<checkout>\lib\profile-link.mjs" --profile-dir "$env:USERPROFILE\.dsh\profiles\desktop" `
+  --package dsh-plugin-git-commit-push --ensure-link "<checkout>"
+```
+
+```bash
+# macOS / Linux
+node "<checkout>/lib/profile-link.mjs" --profile-dir ~/.dsh/profiles/desktop \
+  --package dsh-plugin-git-commit-push --ensure-link "<checkout>"
 ```
 
 ### 已经发布了新版本，插件页却升不上去（pnpm 的 release-age 策略）
@@ -176,9 +200,9 @@ git_commit_push({ action: "auto", tag: "v1.2.3" })
 git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不是仓库时
 ```
 
-普通的一次「提交并推送」只调**一次**：`action="auto"`（斜杠命令走的就是这条路径，插件自己按规则写提交信息）。
+普通的一次「提交并推送」只调**一次**：`action="auto"`（斜杠命令走的就是这条路径，插件自己按规则写提交信息，并按 `type(scope)` 拆成多次提交）。
 `prepare` + `apply` 只在**用户想自己挑提交信息**、或想先看一遍改动时才值得用——`prepare` 给出文件清单、
-逐文件拟定注释和一条候选标题，你读完再决定标题。
+逐文件拟定注释和**这次会拆成哪几次提交**，你读完再决定标题。
 
 `/git-commit-push` 变体（**0 token，完全不经过模型**）：
 `/git-commit-push`、`/git-commit-push --prepare`、`/git-commit-push --no-push`、`/git-commit-push --en`、`/git-commit-push --tag=v1.2.3`、`/git-commit-push 修复登录超时`。
@@ -196,22 +220,29 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不
   删除 src/old.ts → refactor: 移除 old
 标签依据：版本号 1.2.3 → 1.2.4（package.json）
 最近提交风格："feat(ui): 新增主题切换" "fix(api): 修正重试判断"
-拟定标题：`feat(foo): 更新 bar 组件`
+拟定提交（共 3 次，按 type(scope) 拆分）：
+  `feat(foo): 更新 bar 组件`
+  `fix(foo): 修正 parseThing 判断`
+  `refactor: 移除 old`
 （仅预览，未提交未推送）
 ```
 
-提交后（结果卡片只有结论 + 计数摘要 + 信息 / 标签 / 推送，至多一行 `说明：`）：
+提交后（结果卡片只有结论 + 计数摘要 + 提交标题列表 / 标签 / 推送，至多一行 `说明：`）：
 
 ```
 ✅ **Git 提交并推送成功** · `main` · `a1b2c3d`
-检查到 3 个文件改动，本次提交 3 个文件（+48 / -12）
-信息：feat(foo): 更新 bar 组件
+检查到 3 个文件改动，本次提交 3 个文件（+48 / -12） · 3 次提交
+提交：
+  `feat(foo): 更新 bar 组件`
+  `fix(foo): 修正 parseThing 判断`
+  `refactor: 移除 old`
 标签：v1.2.4
 推送：已推送（含标签）
 ```
 
-结果卡片**不再逐条列出每个文件的注释**：那些注释留在**提交正文**里，`git log` 一看就有（见下一节）。
-卡片是给人确认「活儿落地没有」的，不是过程日志。
+结果卡片**不再逐条列出每个文件的注释**：那些注释留在**各自提交的正文**里，`git log` 一看就有（见下一节）。
+卡片是给人确认「活儿落地没有」的，不是过程日志。多次提交时最多列 3 条标题，其余折叠成 `…另有 N 次提交`；
+只有一次提交时保持原来的单行 `信息：<标题>` 形态。
 
 四种结果一眼可辨，不会再出现「卡片只有一行、以为没干活」：
 
@@ -224,23 +255,32 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不
 
 其他状态：`ℹ️ **没有需要提交的改动**`、`⚠️ **当前目录不是 Git 仓库**`（并列出候选仓库）、`❌ **未初始化 Git**`、`❌ **找不到 git**`。
 
-### 多文件：一次提交，正文里每个文件一行自己的注释
+### 多文件：按 `type(scope)` 拆成多次提交
 
-多文件时**仍然是一次提交**，但**提交正文**里每个文件一行自己的 Conventional 注释，而不是一句笼统的话盖住所有文件：
+每个文件先得到**它自己的** Conventional 注释（类型、scope、符号都取自它自己：`docs/` → `docs:`、`*.test.ts` → `test:`，scope 与类型重复时省略，不会出现 `docs(docs)`），然后**按注释里的 `type(scope)` 分组，每个不同的 `type(scope)` 是一次独立提交**：
 
 ```
 feat(foo): 更新 bar 组件
 
-- feat(foo): 新增 bar 组件 · src/foo/bar.ts
-- fix(foo): 修正 parseThing 判断 · src/foo/baz.ts
-- refactor: 移除 old · src/old.ts
+fix(foo): 修正 parseThing 判断
+
+refactor: 移除 old
 ```
 
-- 这些注释在**提交正文**里（`git log` 可见）；结果卡片只给计数摘要，不再把它们重列一遍。
-- 每条注释**只描述那一个文件**：类型取自它自己（`docs/` → `docs:`、`*.test.ts` → `test:`），scope 取它所在的目录（与类型重复时自动省略，不会出现 `docs(docs)`），简述优先用它 diff 里声明的符号（如 `更新 decideRetry`）。
-- 你只给**标题**（单行 `message`）时，插件自动补上这些逐文件注释；你自己写了正文（多行 `message`）则**原样使用**，插件不再添加任何注释。
-- **单文件提交没有正文**——标题已经说完了。
-- 正文最多列 `maxFilesShown` 个文件（默认 12），其余折叠成一行 `- …另有 N 个文件`。
+- **提交顺序固定**：`feat` → `fix` → `refactor` → `perf` → `test` → `docs` → `style` → `build` → `ci` → `chore`，同类型内按 scope 字典序。同一个改动集永远产出同一段历史。
+- **同一 `type(scope)` 的文件仍然是同一次提交**：`src/api/a.ts` 与 `src/api/b.ts` 都是 `feat(api)`，它们合成一次提交，这次提交的**正文**里才是逐文件注释：
+
+  ```
+  feat(api): 更新 a、b
+
+  - feat(api): 更新 a · src/api/a.ts
+  - feat(api): 更新 b · src/api/b.ts
+  ```
+
+- **只装一个文件的提交不写正文**——标题已经说完了；正文最多列 `maxFilesShown` 个文件（默认 12），其余折叠成一行 `- …另有 N 个文件`。
+- 推送**只做一次**（所有分次提交都完成之后），标签指向**最后一次**提交（HEAD）。
+- 冲突处理与 hook 失败策略不变；注意 **hook 每组都要跑一遍**——某一组被 hook 拒绝时，已完成的那几次提交保留在本地且**不推送**，卡片写明「已完成 N/M 次提交，未推送」。
+- 你只给**标题**（单行 `message`）时，它成为**文件最多的那一组**（并列取计划里靠前的一组）的标题，其余各组用插件生成的标题；你自己写了正文（多行 `message`）则**原样使用**，插件不再添加任何注释。
 
 ### 会话里显示什么
 
@@ -353,8 +393,8 @@ DSH 启动加载插件时，如果这个文件还不存在，插件就用包内�
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（91 项）
-node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交、逐文件注释、卡片结论（28 项）
+node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（111 项）
+node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交、按 type(scope) 分次提交、标签发布、卡片结论（32 项）
 node capture-git-format.mjs     # 只打印真实 git 的 -z 原始字节，用于诊断分帧问题
 ```
 
@@ -376,7 +416,7 @@ Windows 上用 DSH 自带的 node：
 - 每个 DSH peer 都是 `optional`（否则 pnpm 会试图把宿主包装进用户 profile）、`dsh.manifestVersion`、`engines.dsh`；
 - **可视化设置表单必须保持「已移除」**：`@deepseek-ai/schemastery` 不许作为依赖或 peer 回来、`lib/schema.js` 不许复活、`index.js` 不许再导出 `Config` 或出现 `uiOverrides`、包内模板不许再提表单；
 - **配置只有一条通道与字段表的一致性**：字段表 ↔ 内置默认值 ↔ 包内模板三者不许漂移、用户文件胜过包内模板、**损坏的配置必须被报告**；
-- **`ERR_PNPM_EPERM` 那条修复的前提**：先证明「rename 覆盖已存在且非空的目录会失败」这个平台前提，再验证 `lib/profile-link.mjs` 对链接只做 unlink（目标 checkout 完好无损）、对目录与不存在的项各有着落、拒绝 `node_modules` 之外的目标，且两个安装脚本都调它而不是各写一份；
+- **`ERR_PNPM_EPERM` 那条修复的前提**：先证明「rename 覆盖已存在且非空的目录会失败」这个平台前提，再验证 `lib/profile-link.mjs` 对链接只做 unlink（目标 checkout 完好无损）、对目录与不存在的项各有着落、拒绝 `node_modules` 之外的目标，且两个安装脚本都调它而不是各写一份；另外两条守着「重跑安装脚本不能把插件删掉」：已经指向本次 checkout 的链接必须返回 `kept` 而原样保留，`ensureLink` 只填洞、绝不覆盖已存在的条目，且两个脚本都带 `--expected-target` / `--ensure-link`；
 - SKILL.md 解析出的 skill 定义满足注册表 `validateRuntimeSkill` 的规则，且 `apply()` 在模拟宿主上确实注册了工具 + 命令 + skill。
 
 它自带两个只认本项目所用语法的小型读取器（YAML patch、skill frontmatter）——本包刻意零依赖，测试不能为了读三五行 YAML 引进一个 parser；读不懂的行会让测试**失败**而不是被忽略。
@@ -394,12 +434,12 @@ lib/analyze.js           改动分类 + 规则化 Conventional Commits 生成 + 
 lib/survey.js            一次仓库摸底：status / numstat / log / 有界 diff
 lib/config.js            配置读取 + 字段表：用户文件 > 模板 > 默认值，并报告损坏的文件
 lib/skill.js             从 SKILL.md 解析出运行时 skill 定义（含 frontmatter 解析）
-lib/profile-edit.mjs     两个安装脚本共用的 profile 清单编辑器（幂等、保留未知字段、无 BOM、自校验）
-lib/profile-link.mjs     两个安装脚本共用的 node_modules 陈旧条目清理器（链接只 unlink、不跟随，防 ERR_PNPM_EPERM）
+lib/profile-edit.mjs     两个安装脚本共用的 profile 清单编辑器（幂等、保留未知字段与**行位置**、无 BOM、内容没变就不写文件、自校验）
+lib/profile-link.mjs     两个安装脚本共用的 node_modules 条目管理器：陈旧条目清理（链接只 unlink、不跟随，防 ERR_PNPM_EPERM）+ `ensureLink` 补上 pnpm 拒绝重建的 `link:` 条目
 setup.ps1                Windows 安装 / 卸载（方式 C）
 setup.sh                 macOS / Linux 安装 / 卸载（方式 C）
-self-test.mjs            纯逻辑 + 打包 / 配置契约自检（91 项）
-self-test-git.mjs        真实 git 集成自检（28 项，自建临时仓库）
+self-test.mjs            纯逻辑 + 打包 / 配置契约自检（111 项）
+self-test-git.mjs        真实 git 集成自检（32 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（诊断分帧问题）
 e2e-check.mjs            直连调用 run()，用于不重启验证提交路径
 ```
