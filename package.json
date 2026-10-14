@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-git-commit-push",
-  "version": "1.0.4",
-  "description": "0 Token Git 提交推送插件，一次调用完成，按 Conventional Commits 为每个变更文件自动生成提交信息，必要时询问打标签。One-call Conventional-Commits git workflow for DeepSeek Harness: survey + commit + optional tag + push, plus a /git-commit-push slash command that runs with no model involvement. Windows and macOS/Linux.",
+  "version": "1.0.5",
+  "description": "0 Token Git 提交推送插件，一次调用完成，按 Conventional Commits 为每个变更文件自动生成提交信息并按 type(scope) 拆成多次提交后一次推送到Git，必要时询问打标签。One-call Conventional-Commits git workflow for DeepSeek Harness: survey + one commit per type(scope) + optional tag + push, plus a /git-commit-push slash command that runs with no model involvement. Windows and macOS/Linux.",
   "type": "module",
   "main": "index.js",
   "exports": {
