@@ -1215,6 +1215,55 @@ check('a rename onto an existing non-empty directory fails — the premise of th
     rmSync(destination, { recursive: true, force: true })
     renameSync(stage, destination)
     assert.equal(existsSync(join(destination, 'new.txt')), true)
+
+    if (process.platform === 'win32') {
+      // Two refinements measured on the same machine, both Windows-only because
+      // POSIX replaces an empty directory and a symlink happily:
+      //   1. the destination does not have to be NON-EMPTY — Windows refuses a
+      //      rename onto ANY existing directory, so what breaks pnpm is the
+      //      leftover PATH existing, not leftover content inside it;
+      //   2. the failed rename never reaches what the destination POINTS AT — a
+      //      junction's target keeps every file. The EPERM install failure is
+      //      therefore annoying, not destructive: it cannot be the explanation
+      //      for files disappearing from a linked checkout, and chasing that
+      //      theory wastes a debugging session.
+      const emptyDestination = join(root, 'empty-dest')
+      const emptyStage = join(root, 'empty-dest_tmp_1_1')
+      mkdirSync(emptyDestination)
+      mkdirSync(emptyStage)
+      let emptyCode
+      try {
+        renameSync(emptyStage, emptyDestination)
+      } catch (error) {
+        emptyCode = error.code
+      }
+      assert.notEqual(
+        emptyCode,
+        undefined,
+        'a rename onto an existing EMPTY directory succeeded; on Windows it must fail, and that is what makes an empty leftover entry just as fatal as a stale checkout',
+      )
+
+      const linkedTarget = join(root, 'linked-target')
+      const linkedEntry = join(root, 'linked-entry')
+      const linkedStage = join(root, 'linked-entry_tmp_1_1')
+      mkdirSync(linkedTarget)
+      writeFileSync(join(linkedTarget, 'inside.txt'), 'inside\n')
+      createLink(linkedTarget, linkedEntry)
+      mkdirSync(linkedStage)
+      writeFileSync(join(linkedStage, 'replacement.txt'), 'replacement\n')
+      let linkedCode
+      try {
+        renameSync(linkedStage, linkedEntry)
+      } catch (error) {
+        linkedCode = error.code
+      }
+      assert.notEqual(linkedCode, undefined, 'the rename onto a junction unexpectedly succeeded')
+      assert.equal(
+        existsSync(join(linkedTarget, 'inside.txt')),
+        true,
+        "the link's target must survive a failed rename untouched",
+      )
+    }
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
