@@ -252,6 +252,58 @@ await check('a bump that is already staged is detected', async () => {
   assert.equal(result.version?.to, '2.0.5')
 })
 
+console.log('\nreal git: version bumps outside package.json')
+
+const codeVersionFixture = createFixtureRepo('git-commit-code-version-')
+codeVersionFixture.write('src/config/index.js', "export default {\n  appVersion: '1.0.0',\n}\n")
+codeVersionFixture.commitAll('feat: init settings')
+codeVersionFixture.write('src/config/index.js', "export default {\n  appVersion: '1.1.0',\n}\n")
+
+await check('a bump in config/index.js (appVersion) is detected', async () => {
+  const result = await survey({ cwd: codeVersionFixture.dir })
+  assert.equal(result.ok, true)
+  assert.equal(result.version?.file, 'src/config/index.js')
+  assert.equal(result.version?.from, '1.0.0')
+  assert.equal(result.version?.to, '1.1.0')
+})
+
+const envVersionFixture = createFixtureRepo('git-commit-env-version-')
+envVersionFixture.write('.env', 'APP_NAME=demo\nVITE_APP_VERSION=1.0.0\n')
+envVersionFixture.commitAll('chore: init env')
+envVersionFixture.write('.env', 'APP_NAME=demo\nVITE_APP_VERSION=1.2.0\n')
+
+await check('a bump in .env (VITE_APP_VERSION) is detected', async () => {
+  const result = await survey({ cwd: envVersionFixture.dir })
+  assert.equal(result.ok, true)
+  assert.equal(result.version?.file, '.env')
+  assert.equal(result.version?.to, '1.2.0')
+})
+
+const priorityFixture = createFixtureRepo('git-commit-version-priority-')
+priorityFixture.write('package.json', JSON.stringify({ name: 'demo', version: '1.0.0' }, null, 2) + '\n')
+priorityFixture.write('src/config/index.js', "export default { appVersion: '2.0.0' }\n")
+priorityFixture.commitAll('build: init')
+priorityFixture.write('package.json', JSON.stringify({ name: 'demo', version: '1.0.1' }, null, 2) + '\n')
+priorityFixture.write('src/config/index.js', "export default { appVersion: '2.0.1' }\n")
+
+await check('a manifest outranks a config module in the same changeset', async () => {
+  const result = await survey({ cwd: priorityFixture.dir })
+  assert.equal(result.ok, true)
+  assert.equal(result.version?.file, 'package.json')
+  assert.equal(result.version?.to, '1.0.1')
+})
+
+const noiseFixture = createFixtureRepo('git-commit-version-noise-')
+noiseFixture.write('vite.config.js', 'export default { server: { version: 2 } }\n')
+noiseFixture.commitAll('chore: init vite config')
+noiseFixture.write('vite.config.js', 'export default { server: { version: 3 } }\n')
+
+await check('a config file without a dotted version produces no tag evidence', async () => {
+  const result = await survey({ cwd: noiseFixture.dir })
+  assert.equal(result.ok, true)
+  assert.equal(result.version, undefined, 'a bare `version: 3` is a counter, not a release')
+})
+
 console.log('\nreal git: survey over a mixed changeset')
 
 await check('survey reports entries, stats, draft and tag evidence', async () => {
@@ -300,6 +352,10 @@ await check('rebaseInProgress is false in a quiet repository', async () => {
 
 fixture.cleanup()
 versionFixture.cleanup()
+codeVersionFixture.cleanup()
+envVersionFixture.cleanup()
+priorityFixture.cleanup()
+noiseFixture.cleanup()
 
 console.log('\nrunner boundaries')
 
@@ -575,6 +631,40 @@ await check('a tag created by this run is pushed to the remote', async () => {
     assert.equal(result.tagPushed, true, String(result.card))
     assert.match(String(result.card), /标签：v1\.2\.3/)
     assert.deepEqual(fixture.remoteTags(), ['v1.2.3'], 'the remote must carry the tag')
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+await check('a custom tag typed in the question is the tag that gets created', async () => {
+  // The reported bug: the question's input box was ignored because the plugin
+  // only read `selected`. Here a fake answerer stands in for the user typing
+  // `release/2024.1` instead of accepting the suggested version tag.
+  const fixture = createRepoWithRemote('git-commit-tag-custom-')
+  try {
+    fixture.repo.write('package.json', JSON.stringify({ name: 'demo', version: '1.0.0' }, null, 2) + '\n')
+    fixture.repo.commitAll('build: init package.json')
+    fixture.repo.write('package.json', JSON.stringify({ name: 'demo', version: '1.0.1' }, null, 2) + '\n')
+
+    let asked = 0
+    const ctx = {
+      get: key => key === 'userQuestions'
+        ? {
+            async askTimed() {
+              asked += 1
+              return { answers: [{ id: 'git-commit-push-tag', selected: [], custom: 'release/2024.1' }] }
+            },
+          }
+        : undefined,
+    }
+    const result = await run(ctx, { action: 'auto', push: true, cwd: fixture.repo.dir }, { agent: {}, callId: 'call-1' })
+
+    assert.equal(asked, 1, 'the version bump must trigger the tag question')
+    assert.equal(result.ok, true, `auto failed: ${result.card}`)
+    assert.equal(result.tagCreated, 'release/2024.1', String(result.card))
+    assert.equal(result.tagPushed, true, String(result.card))
+    assert.match(String(result.card), /标签：release\/2024\.1/)
+    assert.deepEqual(fixture.remoteTags(), ['release/2024.1'], 'the custom tag must reach the remote')
   } finally {
     fixture.cleanup()
   }

@@ -113,7 +113,7 @@ function tagDecision(surveyResult, settings, override) {
  *
  * @returns {Promise<{ decided: string | undefined, via: 'user' | 'auto' | 'skipped', note?: string }>}
  */
-async function askTag(ctx, exec, tag, reasons, settings) {
+export async function askTag(ctx, exec, tag, reasons, settings) {
   if (tag === undefined) return { decided: undefined, via: 'skipped' }
   if (settings.askBeforeTag !== true) return { decided: tag, via: 'auto' }
   // A question needs a live caller to answer it. Without one (a direct `run`
@@ -132,6 +132,10 @@ async function askTag(ctx, exec, tag, reasons, settings) {
     id: 'git-commit-push-tag',
     header: 'Git 标签',
     question: `本次改动满足打标签条件（${reasons.join('；')}）。是否创建标签 ${tag}？`,
+    // `detail` is the only Markdown-rendered part of the card (the question
+    // itself is plain text), and it sits right above the options — the natural
+    // place to point at the custom input below them.
+    detail: `要使用别的名字，直接在下方的输入框里填写标签名（例如 \`v2.0.0\`、\`release/2024.1\`）再提交；**输入内容优先于上面的选项**，标签名是否合法由 git 校验。`,
     options: [
       { label: `添加 ${tag}`, description: `创建标签 ${tag} 并随分支一起推送` },
       { label: '不添加', description: '只提交并推送提交，不创建标签' },
@@ -148,7 +152,14 @@ async function askTag(ctx, exec, tag, reasons, settings) {
     if (timed && answer !== null && typeof answer === 'object' && 'pending' in answer) {
       return { decided: undefined, via: 'skipped', note: `等待标签确认超时，本次未打标签（可用 tag 参数指定 ${tag}）` }
     }
-    const selected = answer?.answers?.find(item => item.id === 'git-commit-push-tag')?.selected?.[0]
+    const item = answer?.answers?.find(entry => entry.id === 'git-commit-push-tag')
+    // A custom answer is the user typing their own tag name. The answering UI
+    // reports it as `custom` (with `selected` empty for a single-choice
+    // question), and it must win over the suggested name: ignoring it made the
+    // input box look broken — the user typed a tag and got "no tag" instead.
+    const custom = typeof item?.custom === 'string' ? item.custom.trim() : ''
+    if (custom !== '') return { decided: custom, via: 'user' }
+    const selected = item?.selected?.[0]
     if (typeof selected === 'string' && selected.startsWith('添加')) return { decided: tag, via: 'user' }
     return { decided: undefined, via: 'user' }
   } catch (error) {

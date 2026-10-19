@@ -31,15 +31,15 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { git, parseStatusZ, tagNameError } from './lib/git.js'
-import { buildMessage, inferType, planCommits, scopeOf, totalsOf, typeOfPath, declaredSymbols, removedDeclarationCount, renderCard } from './lib/analyze.js'
-import { normalizeEntries } from './lib/survey.js'
+import { buildMessage, inferType, planCommits, scopeOf, totalsOf, typeOfPath, declaredSymbols, removedDeclarationCount, renderCard, versionFileRank } from './lib/analyze.js'
+import { normalizeEntries, parseVersion } from './lib/survey.js'
 import { ensureUserConfig, loadSettingsReport, DEFAULTS, FIELDS as SETTINGS_FIELDS, IDENTITY_FIELDS, USER_CONFIG_COMMENT } from './lib/config.js'
 import { clearStaleEntry, ensureLink } from './lib/profile-link.mjs'
 import {
   editManifest, editProfileManifest, manifestProblem, serializeManifest,
 } from './lib/profile-edit.mjs'
 import { parseSkillFile, skillDefinition, SKILL_NAME, SKILL_PATH } from './lib/skill.js'
-import { apply, applyCard, commitPlan, inject, COMMAND_NAME, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
+import { apply, applyCard, askTag, commitPlan, inject, COMMAND_NAME, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
 
 /**
  * Point the whole run at a throwaway DSH home, so no test can write into the
@@ -130,6 +130,39 @@ check('normalizeEntries keeps status/staged/unstaged', () => {
   assert.equal(entries[1].staged, true)
   assert.equal(entries[2].staged, false)
   assert.equal(entries[2].unstaged, true)
+})
+
+console.log('\nversion detection (manifest, env and code files)')
+
+check('a manifest outranks code, which outranks config-style names', () => {
+  assert.equal(versionFileRank('package.json'), 0)
+  assert.equal(versionFileRank('src/settings/version.js'), 1)
+  assert.equal(versionFileRank('.env'), 2)
+  assert.equal(versionFileRank('src/config/index.js'), 3)
+  assert.equal(versionFileRank('app.setting.ts'), 3)
+  assert.equal(versionFileRank('src/app.js'), -1)
+  assert.equal(versionFileRank('package-lock.json'), -1)
+})
+
+check('parseVersion reads version and appVersion from JSON, JS, TOML and dotenv', () => {
+  assert.equal(parseVersion('{"name":"demo","version":"1.0.0"}'), '1.0.0')
+  assert.equal(parseVersion('{"version":"1"}'), '1', 'a manifest may carry a one-part version')
+  assert.equal(parseVersion('{"app":{"appVersion":"2.3.4"}}'), '2.3.4')
+  assert.equal(parseVersion("export const APP_VERSION = '1.4.0'\n"), '1.4.0')
+  assert.equal(parseVersion("module.exports = { appVersion: '2.0.0' }\n"), '2.0.0')
+  assert.equal(parseVersion("export default {\n  app: { version: '3.1.4' },\n}\n"), '3.1.4')
+  assert.equal(parseVersion('appVersion: "v2.1.0-beta.1"'), 'v2.1.0-beta.1')
+  assert.equal(parseVersion('VITE_APP_VERSION=5.0.1\n'), '5.0.1')
+  assert.equal(parseVersion('version = "0.2.0"\n'), '0.2.0')
+  assert.equal(parseVersion('<Project><Version>2.0.0</Version></Project>'), '2.0.0')
+  assert.equal(parseVersion('__version__ = "3.3.3"'), '3.3.3')
+})
+
+check('parseVersion refuses prose, ports and near-miss keys', () => {
+  assert.equal(parseVersion('export const port = 3000\n'), undefined)
+  assert.equal(parseVersion("const minimumVersion = '1.0.0'\n"), undefined)
+  assert.equal(parseVersion('{"version": 2}'), undefined)
+  assert.equal(parseVersion(''), undefined)
 })
 
 console.log('\nchange classification')
@@ -638,6 +671,68 @@ await checkAsync('git() surfaces a clean GitError when git cannot answer', async
     () => git(process.platform === 'win32' ? 'C:\\nonexistent-dsh-test-dir' : '/nonexistent-dsh-test-dir', ['rev-parse'], { timeoutMs: 5_000 }),
     (error) => error instanceof Error && error.name === 'GitError' && typeof error.code === 'string',
   )
+})
+
+console.log('\nthe tag question (a custom name comes from the input box)')
+
+const TAG_SETTINGS = { ...DEFAULTS, askBeforeTag: true, askTimeoutMs: 120_000 }
+
+/** A fake `userQuestions` service that hands back one prepared answer. */
+function questionContext(answer, { timed = true } = {}) {
+  const seen = { requests: [] }
+  const service = timed
+    ? {
+        async askTimed(request, callId, timeoutMs) {
+          seen.requests.push({ request, callId, timeoutMs })
+          return answer
+        },
+      }
+    : {
+        async ask(request) {
+          seen.requests.push({ request })
+          return answer
+        },
+      }
+  return { seen, ctx: { get: key => (key === 'userQuestions' ? service : undefined) }, exec: { agent: {}, callId: 'call-1' } }
+}
+
+await checkAsync('a custom tag typed into the input box wins over the suggestion', async () => {
+  // The reported bug: the answering UI sends the typed name as `custom` with
+  // `selected` empty, and the plugin only looked at `selected` — so the input
+  // box did nothing and the run reported "no tag".
+  const fake = questionContext({ answers: [{ id: 'git-commit-push-tag', selected: [], custom: ' v9.8.7 ' }] })
+  const result = await askTag(fake.ctx, fake.exec, 'v1.0.1', ['版本号 1.0.0 → 1.0.1'], TAG_SETTINGS)
+  assert.equal(result.decided, 'v9.8.7')
+  assert.equal(result.via, 'user')
+
+  const question = fake.seen.requests[0].request.questions[0]
+  assert.match(question.question, /是否创建标签/)
+  assert.match(question.detail, /输入框/)
+  assert.deepEqual(question.options.map(option => option.label), ['添加 v1.0.1', '不添加'])
+})
+
+await checkAsync('the suggested tag, "不添加" and a blank custom answer still behave', async () => {
+  const yes = questionContext({ answers: [{ id: 'git-commit-push-tag', selected: ['添加 v1.0.1'], custom: '' }] })
+  assert.equal((await askTag(yes.ctx, yes.exec, 'v1.0.1', [], TAG_SETTINGS)).decided, 'v1.0.1')
+
+  const no = questionContext({ answers: [{ id: 'git-commit-push-tag', selected: ['不添加'] }] })
+  assert.equal((await askTag(no.ctx, no.exec, 'v1.0.1', [], TAG_SETTINGS)).decided, undefined)
+
+  const blank = questionContext({ answers: [{ id: 'git-commit-push-tag', selected: ['添加 v2.0.0'], custom: '   ' }] })
+  assert.equal((await askTag(blank.ctx, blank.exec, 'v2.0.0', [], TAG_SETTINGS)).decided, 'v2.0.0')
+})
+
+await checkAsync('a timed-out question does not tag, and says how to force it', async () => {
+  const fake = questionContext({ pending: true })
+  const result = await askTag(fake.ctx, fake.exec, 'v1.0.1', [], TAG_SETTINGS)
+  assert.equal(result.decided, undefined)
+  assert.match(String(result.note), /超时/)
+  assert.match(String(result.note), /tag 参数/)
+})
+
+await checkAsync('askBeforeTag:false tags without asking', async () => {
+  const result = await askTag({ get: () => undefined }, undefined, 'v1.0.1', [], { ...TAG_SETTINGS, askBeforeTag: false })
+  assert.deepEqual(result, { decided: 'v1.0.1', via: 'auto' })
 })
 
 console.log('\nbundle declaration (what the Plugins page reads)')
