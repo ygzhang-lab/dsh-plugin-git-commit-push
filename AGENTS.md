@@ -37,8 +37,8 @@ lib/skill.js             从 SKILL.md 解析运行时 skill 定义
 lib/profile-edit.mjs     setup.ps1 / setup.sh 共用的 profile 清单编辑器（幂等、保留未知字段与行位置、内容没变不写文件、自校验；见 §5）
 lib/profile-link.mjs     setup.ps1 / setup.sh 共用的 node_modules 条目管理器：清残留项 + `ensureLink` 补链（见 §5）
 setup.ps1 / setup.sh     Windows / macOS·Linux 的源码（link:）安装与卸载
-self-test.mjs            纯逻辑 + 打包/配置/skill 契约自检（111 项，不需要 DSH、不碰你的仓库）
-self-test-git.mjs        真实 git 集成自检（32 项，自建临时仓库）
+self-test.mjs            纯逻辑 + 打包/配置/skill 契约自检（118 项，不需要 DSH、不碰你的仓库）
+self-test-git.mjs        真实 git 集成自检（37 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（分帧问题诊断）
 e2e-check.mjs            直接调 run()，用于不重启验证提交路径
 ```
@@ -49,8 +49,8 @@ e2e-check.mjs            直接调 run()，用于不重启验证提交路径
 
 ```powershell
 $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
-& $node self-test.mjs        # 纯逻辑 + 打包契约，必须 111 passed / 0 failed
-& $node self-test-git.mjs    # 真实 git，必须 32 passed / 0 failed
+& $node self-test.mjs        # 纯逻辑 + 打包契约，必须 118 passed / 0 failed
+& $node self-test-git.mjs    # 真实 git，必须 37 passed / 0 failed
 ```
 
 两个测试都显式 import 完整模块图（曾有一个「import 了不存在的导出」导致整个插件图无法求值、工具与命令都不注册的真实事故）。改任何模块后先跑它们。
@@ -64,9 +64,11 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 3. `prepare` 分支：只回 `renderCard()` 的预览卡片，不动仓库。
 4. `apply`/`auto`：`commitPlan()`（index.js）把 `survey` 的 `draft.groups` 变成本次要造的提交列表 → `doCommit()`：`stageAll`（autoAdd）→ `numstat`（**必须 await，否则 +0/-0**，这是修过的真实 bug）→ **逐组 `commit()`**（多组时带 `-- <paths>`，见下）→ 再 `tagDecision()` + `askTag()`（内置提问卡片，不花 token）→ `doTagAndPush()`（**只推一次**）→ `applyCard()`。
 5. **提交拆分**：`planCommits()`（lib/analyze.js）按每个文件自己的 `type(scope)` 分组，**每个不同的 `type(scope)` 一次提交**，顺序按 type 固定表 + scope 字典序。只有一族时 `draft.message` 就是那一次提交的信息，且**不传 paths**（走整索引 `git commit -m`，与旧行为逐字节一致）。多族时每组调 `git commit -m <msg> -- <paths>`（git 的 partial commit），组内多于一个文件时正文才写逐文件注释。**rename 必须把 `origPath` 与新路径都放进 paths**，否则只提交新增、把删除留在工作区。多组时 `autoAdd: false` 的部分暂存语义会退化为「按工作区提交这些路径」，这是 git partial commit 的定义，不是 bug。
-6. 显式 `tag` 参数视为指令，跳过提问直接打；提问服务不可用/子代理调用/超时 → **一律不打**并在卡片说明。标签指向**最后一次**提交（HEAD）。
+6. 显式 `tag` 参数视为指令，跳过提问直接打；提问服务不可用/子代理调用/超时 → **一律不打**并在卡片说明。标签指向**最后一次**提交（HEAD）。**自定义标签**：提问卡片的输入框答案在 `answers[].custom`（单选时 `selected` 为空），**custom 优先于 selected**；`askTag` 取 trim 后的 custom 作为标签名，合法性仍由 `doTagAndPush` 的 `tagNameError` 校验（不合法的跳过并写 note）。只读 `selected` 是已修的真实 bug（用户输入了却被当成「不添加」）。`askTag` 已导出供 `self-test.mjs` 用假提问服务测试（4 条），`self-test-git.mjs` 另有一条端到端用例（假 answerer 输入 `release/2024.1`，断言远端真收到这个标签）。
 7. 标签发布：分支推成功后，用**单独一条命令**推标签（`git push <remote> refs/tags/<tag>`），这样标签被拒不会与分支被拒混在一起。**本地已存在的标签也要推送**——跳过的是「创建」，不是「发布」（曾经两者一起跳过，标签就永远留在本地）。卡片的 `标签：` 显示本次真正在处理的标签；输出 schema 里的 `tagPushed` 回答「标签到底上没上远端」；`autoPush` 关闭或推送失败时会明确写「标签 X 仅本地（未推送）」。
 8. 提交中途失败（hook 拒绝某一组）：**已建成的提交保留、绝不推送**，卡片写「已完成 N/M 次提交，未推送」，输出里的 `commits` 就是已完成数。
+
+**版本号识别**（`versionFileRank`/`isVersionFile` 在 lib/analyze.js，`parseVersion`/`detectVersion` 在 lib/survey.js）：候选文件按 rank 依次是**清单**（`package.json`、`Cargo.toml`、`pyproject.toml` 等，0）→ 路径任一段含 `version`（1）→ `.env*`/`env.*`（2）→ 路径任一段含 `setting`/`config`（3，所以 `settings/version.js`、`config/index.js`、`setting.js`、`config.js` 都覆盖）。键名认 `version` 与 `appVersion`（大小写不敏感；`APP_VERSION`、`VITE_APP_VERSION` 也认）。survey 先用**有界**（≤2 MiB）工作区读取确认内容里真有版本，才去 stage 它——名字匹配不等于候选，避免把无关的 `config.js`/`tsconfig.json` 塞进暂存区。`detectVersion` 按 rank 读 `:file` 与 `HEAD:file`，所以清单永远优先于同批次的 config 模块。**值必须带点号**（`1.2.3`；顶层清单键例外，`"version": "1"` 仍可用）：`version: 2` 是 schema 版本号，不能拿来建议 tag。守着的用例见 `self-test.mjs` 的「version detection (manifest, env and code files)」与 `self-test-git.mjs` 的「version bumps outside package.json」。
 
 卡片契约（**用户明确要求过，不要退回旧形态**）：
 

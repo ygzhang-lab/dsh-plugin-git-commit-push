@@ -236,6 +236,8 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不
 （仅预览，未提交未推送）
 ```
 
+`标签依据` 里的版本号来自**这次改动的文件本身**。除了 `package.json`、`Cargo.toml`、`pyproject.toml`、`composer.json`、`pom.xml` 等清单，插件也会读 `.env`（`VERSION=…`、`VITE_APP_VERSION=…`）以及**任何路径含 `version` / `setting` / `config` 的文件**——前端后端都适用：`settings/version.js`、`settings/index.js`、`config/index.js`、`setting.js`、`config.js`、`src/config/index.ts` 等，键名认 `version` 与 `appVersion`（大小写不敏感）。优先级固定：清单 > version 文件 > `.env` > setting/config 模块，所以同一批改动里 `package.json` 永远优先。值必须像版本号（含点号，如 `1.2.3`；清单顶层的 `version` 键例外；`version: 2` 这种 schema 版本号不会被当作发布版本），找不到版本就不提打标签。
+
 提交后（结果卡片只有结论 + 计数摘要 + 提交标题列表 / 标签 / 推送，至多一行 `说明：`）：
 
 ```
@@ -370,7 +372,7 @@ DSH 启动加载插件时，如果这个文件还不存在，插件就用包内�
 
 **自动处理**：无 upstream 时 `push -u origin <当前分支>`；推送被拒（远程有新提交）时 `pull --rebase` 后重推一次；rebase 冲突则**只 abort 本次自己启动的 rebase**（先探测 `rebase-merge`/`rebase-apply`，绝不丢弃你原有的 rebase 进度）并如实报告；tag 名字非法则跳过并说明。
 
-**打标签从严**：只有你明确同意（或 `askBeforeTag: false`）才会打标签。但**显式传入 `tag` 参数视为指令，直接执行**——不再经过提问（此前这里有个 bug：显式 tag 也会走提问，没有可用提问者时被静默丢弃，实测抓到并修复）。提问服务不可用、你不在现场（子代理调用）、等待超时——一律**不打**，并在卡片里告诉你怎么用 `tag` 参数补打。
+**打标签从严**：只有你明确同意（或 `askBeforeTag: false`）才会打标签。但**显式传入 `tag` 参数视为指令，直接执行**——不再经过提问（此前这里有个 bug：显式 tag 也会走提问，没有可用提问者时被静默丢弃，实测抓到并修复）。提问卡片除了「添加建议标签 / 不添加」，**底部的输入框可以直接填自定义标签名**（如 `v2.0.0`、`release/2024.1`）；输入内容优先于选项，标签名是否合法照旧由 git 校验，不合法会跳过并在卡片说明。提问服务不可用、你不在现场（子代理调用）、等待超时——一律**不打**，并在卡片里告诉你怎么用 `tag` 参数补打。
 
 **标签必须真的上到远端**：分支推送成功后，插件会**再单独执行一次标签推送**（单独一条命令，这样标签被拒不会和分支被拒混在一起）。两种此前会「标签只在本地」的情况现在都覆盖了：
 
@@ -402,8 +404,8 @@ DSH 启动加载插件时，如果这个文件还不存在，插件就用包内�
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（111 项）
-node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交、按 type(scope) 分次提交、标签发布、卡片结论（32 项）
+node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（118 项）
+node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交、按 type(scope) 分次提交、标签发布、卡片结论（37 项）
 node capture-git-format.mjs     # 只打印真实 git 的 -z 原始字节，用于诊断分帧问题
 ```
 
@@ -447,8 +449,8 @@ lib/profile-edit.mjs     两个安装脚本共用的 profile 清单编辑器（�
 lib/profile-link.mjs     两个安装脚本共用的 node_modules 条目管理器：陈旧条目清理（链接只 unlink、不跟随，防 ERR_PNPM_EPERM）+ `ensureLink` 补上 pnpm 拒绝重建的 `link:` 条目
 setup.ps1                Windows 安装 / 卸载（方式 C）
 setup.sh                 macOS / Linux 安装 / 卸载（方式 C）
-self-test.mjs            纯逻辑 + 打包 / 配置契约自检（111 项）
-self-test-git.mjs        真实 git 集成自检（32 项，自建临时仓库）
+self-test.mjs            纯逻辑 + 打包 / 配置契约自检（118 项）
+self-test-git.mjs        真实 git 集成自检（37 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（诊断分帧问题）
 e2e-check.mjs            直连调用 run()，用于不重启验证提交路径
 ```

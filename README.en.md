@@ -248,6 +248,15 @@ recent style: "feat(ui): add theme switch" "fix(api): correct retry decision"
 (preview only — nothing committed, nothing pushed)
 ```
 
+The version in `tag evidence` comes from **the changed files themselves**. Besides manifests (`package.json`,
+`Cargo.toml`, `pyproject.toml`, `composer.json`, `pom.xml`, …), the plugin reads `.env`
+(`VERSION=…`, `VITE_APP_VERSION=…`) and **any file whose path contains `version` / `setting` / `config`** — this
+works for frontend and backend projects alike: `settings/version.js`, `settings/index.js`, `config/index.js`,
+`setting.js`, `config.js`, `src/config/index.ts`, … The key may be `version` or `appVersion`
+(case-insensitive). Priority is fixed: manifest > version file > `.env` > setting/config module, so
+`package.json` always wins within one changeset. The value must look like a version (a dot, e.g. `1.2.3`; a top-level manifest `version` is exempt;
+a schema counter such as `version: 2` is not treated as a release), and no version means no tag suggestion.
+
 And after a commit (the result card is only the verdict, one counts summary, the commit list or single
 `信息` line, `标签` / `推送`, plus at most one `说明：` line):
 
@@ -413,7 +422,10 @@ started itself** (probing `rebase-merge`/`rebase-apply` first, so your own rebas
 discarded) and reports honestly; an invalid tag name is skipped with an explanation.
 
 **Tagging is conservative**: a tag is created only with your explicit consent (or `askBeforeTag: false`).
-An explicitly passed `tag` argument is treated as an instruction and skips the question. No answerer
+An explicitly passed `tag` argument is treated as an instruction and skips the question. Besides
+"add the suggested tag / do not add", the question card has an **input box for a custom tag name**
+(e.g. `v2.0.0`, `release/2024.1`); typed text wins over the options, and git still validates the name —
+an invalid one is skipped with an explanation. No answerer
 available, you are not present (a delegated call), or the wait timed out — all mean **do not tag**, and the
 card tells you how to add it later with the `tag` argument.
 
@@ -464,8 +476,8 @@ directory and delete them):
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # pure logic + packaging/config/skill contracts (111 checks)
-node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit, type(scope) commit splitting, tag publishing, card verdicts (32 checks)
+node self-test.mjs              # pure logic + packaging/config/skill contracts (118 checks)
+node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit, type(scope) commit splitting, tag publishing, card verdicts (37 checks)
 node capture-git-format.mjs     # prints raw git -z bytes, for diagnosing framing
 ```
 
@@ -534,8 +546,8 @@ lib/profile-edit.mjs     profile manifest editor shared by both installers (idem
 lib/profile-link.mjs     node_modules entry manager shared by both installers: stale-entry removal (unlinks a link, never follows it, so ERR_PNPM_EPERM cannot recur) plus `ensureLink`, which fills the `link:` entry pnpm refuses to rebuild
 setup.ps1                Windows install / uninstall (path C)
 setup.sh                 macOS / Linux install / uninstall (path C)
-self-test.mjs            pure logic + packaging/config contracts (111 checks)
-self-test-git.mjs        real-git integration (32 checks, own temporary repository)
+self-test.mjs            pure logic + packaging/config contracts (118 checks)
+self-test-git.mjs        real-git integration (37 checks, own temporary repository)
 capture-git-format.mjs   prints raw git -z bytes (framing diagnostics)
 e2e-check.mjs            calls run() directly, to verify the commit path without restarting DSH
 ```
