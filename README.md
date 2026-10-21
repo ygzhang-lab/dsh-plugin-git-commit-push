@@ -203,15 +203,22 @@ minimumReleaseAgeExclude:
 
 ```
 git_commit_push({ action: "auto" })                           # 普通「提交并推送」就这一条：一步提交 + 推送
-git_commit_push({ action: "prepare" })                        # 只汇总，不改仓库（用户想挑提交信息时）
+git_commit_push({ action: "prepare" })                        # 只汇总，不改仓库（并给出每个文件的一行变更摘要）
 git_commit_push({ action: "apply", message: "feat(x): …" })   # 提交 + 推送，用你写的标题
+git_commit_push({ action: "apply", message: "feat(x): …",     # 模型自己写逐文件注释（正文）
+                  notes: [{ path: "src/x.ts", note: "修正重试阈值" }] })
 git_commit_push({ action: "auto", tag: "v1.2.3" })
 git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不是仓库时
 ```
 
 普通的一次「提交并推送」只调**一次**：`action="auto"`（斜杠命令走的就是这条路径，插件自己按规则写提交信息，并按 `type(scope)` 拆成多次提交）。
-`prepare` + `apply` 只在**用户想自己挑提交信息**、或想先看一遍改动时才值得用——`prepare` 给出文件清单、
-逐文件拟定注释和**这次会拆成哪几次提交**，你读完再决定标题。
+`prepare` + `apply` 用于**用户想自己挑提交信息**、或想先看一遍改动——`prepare` 给出文件清单、
+逐文件拟定注释、**这次会拆成哪几次提交**，以及每个文件**一行变更摘要**（`｜ -旧代码 → +新代码`）。
+
+**模型写注释（少量 token）**：拿到 `prepare` 摘要后，模型可以为每个文件写一行注释，用 `notes: [{ path, note }]`
+交回；`note` 不带 `type(scope):` 前缀时插件会补上该文件自己的，没写的文件继续用生成的注释，写错的路径被忽略。
+摘要是每侧最多 60 字符的单行证据，**不是 diff**，所以整件事通常只多花几百 token，而不是把 diff 塞进会话。
+`/git-commit-push` 斜杠命令不经过模型，永远是规则生成的注释。
 
 `/git-commit-push` 变体（**0 token，完全不经过模型**）：
 `/git-commit-push`、`/git-commit-push --prepare`、`/git-commit-push --no-push`、`/git-commit-push --en`、`/git-commit-push --tag=v1.2.3`、`/git-commit-push 修复登录超时`。
@@ -219,13 +226,13 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不
 ### 卡片长什么样
 
 预览（`prepare` / `/git-commit-push --prepare`）——第一行就是结论，每个文件后面跟着**它自己的拟定注释**
-（这一张就是给人看的复核面，列几个文件由 `maxFilesShown` 决定）：
+和**一行变更摘要**（这一张就是给人看的复核面，列几个文件由 `maxFilesShown` 决定）：
 
 ```
 🔎 **检查到 3 个文件改动（未提交）** · `main` · +48 / -12
 状态：新增 1 / 修改 1 / 删除 1
-  新增 src/foo/bar.ts +40/-0 → feat(foo): 新增 bar 组件
-  修改 src/foo/baz.ts +8/-10 → fix(foo): 修正 parseThing 判断
+  新增 src/foo/bar.ts +40/-0 → feat(foo): 新增 bar 组件 ｜ +export function bar(props: Props) {…}
+  修改 src/foo/baz.ts +8/-10 → fix(foo): 修正 parseThing 判断 ｜ -if (x === undefined) return → +if (x == null) return
   删除 src/old.ts → refactor: 移除 old
 标签依据：版本号 1.2.3 → 1.2.4（package.json）
 最近提交风格："feat(ui): 新增主题切换" "fix(api): 修正重试判断"
@@ -404,8 +411,8 @@ DSH 启动加载插件时，如果这个文件还不存在，插件就用包内�
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（118 项）
-node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交、按 type(scope) 分次提交、标签发布、卡片结论（37 项）
+node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（123 项）
+node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交、按 type(scope) 分次提交、标签发布、卡片结论（38 项）
 node capture-git-format.mjs     # 只打印真实 git 的 -z 原始字节，用于诊断分帧问题
 ```
 
@@ -449,8 +456,8 @@ lib/profile-edit.mjs     两个安装脚本共用的 profile 清单编辑器（�
 lib/profile-link.mjs     两个安装脚本共用的 node_modules 条目管理器：陈旧条目清理（链接只 unlink、不跟随，防 ERR_PNPM_EPERM）+ `ensureLink` 补上 pnpm 拒绝重建的 `link:` 条目
 setup.ps1                Windows 安装 / 卸载（方式 C）
 setup.sh                 macOS / Linux 安装 / 卸载（方式 C）
-self-test.mjs            纯逻辑 + 打包 / 配置契约自检（118 项）
-self-test-git.mjs        真实 git 集成自检（37 项，自建临时仓库）
+self-test.mjs            纯逻辑 + 打包 / 配置契约自检（123 项）
+self-test-git.mjs        真实 git 集成自检（38 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（诊断分帧问题）
 e2e-check.mjs            直连调用 run()，用于不重启验证提交路径
 ```

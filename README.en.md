@@ -214,16 +214,25 @@ the tool out of the model-visible surface (or `deferLoading` it) removes that co
 
 ```
 git_commit_push({ action: "auto" })                           # a plain "commit and push": one step, no second turn
-git_commit_push({ action: "prepare" })                        # survey only, no writes (when the user wants to pick a message)
+git_commit_push({ action: "prepare" })                        # survey only, no writes (with a one-line digest per file)
 git_commit_push({ action: "apply", message: "feat(x): …" })   # commit + push using your subject
+git_commit_push({ action: "apply", message: "feat(x): …",     # the model writes the per-file body notes
+                  notes: [{ path: "src/x.ts", note: "修正重试阈值" }] })
 git_commit_push({ action: "auto", tag: "v1.2.3" })
 git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # session cwd is not the repository
 ```
 
 A plain "commit and push" is **one** call: `action="auto"` (the slash command takes the same path and lets the
-plugin write the messages by rule, split into one commit per `type(scope)`). `prepare` + `apply` is only worth it
-when the **user wants to choose the subject**, or wants to review the changes first: `prepare` returns the file list,
-each file's draft note and **the commits this run will create**, and you decide the subject after reading it.
+plugin write the messages by rule, split into one commit per `type(scope)`). `prepare` + `apply` is for when the
+**user wants to choose the subject**, or wants to review the changes first: `prepare` returns the file list,
+each file's draft note, **the commits this run will create**, and a **one-line change digest** per file
+(`｜ -old → +new`).
+
+**Model-written notes (a few tokens)**: from that digest the model can write one line per file and send it back as
+`notes: [{ path, note }]`; a note without a `type(scope):` prefix gets the file's own, files it omits keep the
+generated note, and unknown paths are ignored. The digest is at most 60 characters per side, **not the diff**, so
+the whole thing usually costs a few hundred tokens instead of pushing a diff into the conversation. The
+`/git-commit-push` slash command takes no model, so it always uses the rule-generated notes.
 
 `/git-commit-push` variants (**0 tokens, no model involved**):
 `/git-commit-push`, `/git-commit-push --prepare`, `/git-commit-push --no-push`, `/git-commit-push --en`, `/git-commit-push --tag=v1.2.3`, `/git-commit-push fix login timeout`.
@@ -231,13 +240,14 @@ each file's draft note and **the commits this run will create**, and you decide 
 ### What the card looks like
 
 The preview (`prepare` / `/git-commit-push --prepare`) — the first line is the verdict, and every file is
-followed by **its own draft note** (this is the human review surface; `maxFilesShown` bounds how many files it lists):
+followed by **its own draft note** and a **one-line change digest** (this is the human review surface;
+`maxFilesShown` bounds how many files it lists):
 
 ```
 🔎 **检查到 3 个文件改动（未提交）** · `main` · +48 / -12
 status: 1 added / 1 modified / 1 deleted
-  added    src/foo/bar.ts +40/-0 → feat(foo): add bar component
-  modified src/foo/baz.ts +8/-10 → fix(foo): correct parseThing decision
+  added    src/foo/bar.ts +40/-0 → feat(foo): add bar component ｜ +export function bar(props: Props) {…}
+  modified src/foo/baz.ts +8/-10 → fix(foo): correct parseThing decision ｜ -if (x === undefined) return → +if (x == null) return
   deleted  src/old.ts → refactor: remove old
 tag evidence: version 1.2.3 → 1.2.4 (package.json)
 recent style: "feat(ui): add theme switch" "fix(api): correct retry decision"
@@ -476,8 +486,8 @@ directory and delete them):
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # pure logic + packaging/config/skill contracts (118 checks)
-node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit, type(scope) commit splitting, tag publishing, card verdicts (37 checks)
+node self-test.mjs              # pure logic + packaging/config/skill contracts (123 checks)
+node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit, type(scope) commit splitting, tag publishing, card verdicts (38 checks)
 node capture-git-format.mjs     # prints raw git -z bytes, for diagnosing framing
 ```
 
@@ -546,8 +556,8 @@ lib/profile-edit.mjs     profile manifest editor shared by both installers (idem
 lib/profile-link.mjs     node_modules entry manager shared by both installers: stale-entry removal (unlinks a link, never follows it, so ERR_PNPM_EPERM cannot recur) plus `ensureLink`, which fills the `link:` entry pnpm refuses to rebuild
 setup.ps1                Windows install / uninstall (path C)
 setup.sh                 macOS / Linux install / uninstall (path C)
-self-test.mjs            pure logic + packaging/config contracts (118 checks)
-self-test-git.mjs        real-git integration (37 checks, own temporary repository)
+self-test.mjs            pure logic + packaging/config contracts (123 checks)
+self-test-git.mjs        real-git integration (38 checks, own temporary repository)
 capture-git-format.mjs   prints raw git -z bytes (framing diagnostics)
 e2e-check.mjs            calls run() directly, to verify the commit path without restarting DSH
 ```

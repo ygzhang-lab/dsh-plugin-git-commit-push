@@ -5,7 +5,7 @@
 
 - 语言：面向用户的文档/卡片/提交信息默认**中文**（`defaultLanguage: "zh"` 可切 `en`）；代码注释与标识符英文。
 - 包名：`dsh-plugin-git-commit-push`；工具名 `git_commit_push`；斜杠命令 `git-commit-push`；skill 名 `git-commit-push`（**四处同名**，不要引入第二套名字）。
-- 当前版本 `1.0.5`（npm 上 `1.0.1`–`1.0.5` 都已发布，`1.0.5` 是 latest）。零运行时依赖。
+- 当前版本 `1.0.6`（准备发布；npm 上 `1.0.1`–`1.0.5` 已发布，`1.0.5` 是 latest）。零运行时依赖。
 
 ---
 
@@ -37,8 +37,8 @@ lib/skill.js             从 SKILL.md 解析运行时 skill 定义
 lib/profile-edit.mjs     setup.ps1 / setup.sh 共用的 profile 清单编辑器（幂等、保留未知字段与行位置、内容没变不写文件、自校验；见 §5）
 lib/profile-link.mjs     setup.ps1 / setup.sh 共用的 node_modules 条目管理器：清残留项 + `ensureLink` 补链（见 §5）
 setup.ps1 / setup.sh     Windows / macOS·Linux 的源码（link:）安装与卸载
-self-test.mjs            纯逻辑 + 打包/配置/skill 契约自检（118 项，不需要 DSH、不碰你的仓库）
-self-test-git.mjs        真实 git 集成自检（37 项，自建临时仓库）
+self-test.mjs            纯逻辑 + 打包/配置/skill 契约自检（123 项，不需要 DSH、不碰你的仓库）
+self-test-git.mjs        真实 git 集成自检（38 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（分帧问题诊断）
 e2e-check.mjs            直接调 run()，用于不重启验证提交路径
 ```
@@ -49,8 +49,8 @@ e2e-check.mjs            直接调 run()，用于不重启验证提交路径
 
 ```powershell
 $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
-& $node self-test.mjs        # 纯逻辑 + 打包契约，必须 118 passed / 0 failed
-& $node self-test-git.mjs    # 真实 git，必须 37 passed / 0 failed
+& $node self-test.mjs        # 纯逻辑 + 打包契约，必须 123 passed / 0 failed
+& $node self-test-git.mjs    # 真实 git，必须 38 passed / 0 failed
 ```
 
 两个测试都显式 import 完整模块图（曾有一个「import 了不存在的导出」导致整个插件图无法求值、工具与命令都不注册的真实事故）。改任何模块后先跑它们。
@@ -60,7 +60,7 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 `run()`（index.js）→ `runWithSettings()`：
 
 1. `loadSettingsReport()` 读配置（**唯一渠道**：`$DSH_HOME/git-commit-push.config.json` > 包内模板 > 默认值）。文件坏了要在卡片里报出来，不许静默忽略。用户配置文件由 `apply()` 在挂载时用 `ensureUserConfig()` 生成：只在缺失时写、绝不覆盖手改、失败只记日志（不能让插件挂不上）。
-2. `survey({ cwd, language, maxFilesShown })`（lib/survey.js）一次拿全：分支、entries、stats、近几条提交、有界 diff、版本号变化、是否无 upstream。**不是仓库 / 干净 / 多仓库**三种情况分别返回不同卡片，不许猜。
+2. `survey({ cwd, language, maxFilesShown, notes })`（lib/survey.js）一次拿全：分支、entries、stats、近几条提交、有界 diff、版本号变化、是否无 upstream；`notes` 是模型写的逐文件注释（见下）。**不是仓库 / 干净 / 多仓库**三种情况分别返回不同卡片，不许猜。
 3. `prepare` 分支：只回 `renderCard()` 的预览卡片，不动仓库。
 4. `apply`/`auto`：`commitPlan()`（index.js）把 `survey` 的 `draft.groups` 变成本次要造的提交列表 → `doCommit()`：`stageAll`（autoAdd）→ `numstat`（**必须 await，否则 +0/-0**，这是修过的真实 bug）→ **逐组 `commit()`**（多组时带 `-- <paths>`，见下）→ 再 `tagDecision()` + `askTag()`（内置提问卡片，不花 token）→ `doTagAndPush()`（**只推一次**）→ `applyCard()`。
 5. **提交拆分**：`planCommits()`（lib/analyze.js）按每个文件自己的 `type(scope)` 分组，**每个不同的 `type(scope)` 一次提交**，顺序按 type 固定表 + scope 字典序。只有一族时 `draft.message` 就是那一次提交的信息，且**不传 paths**（走整索引 `git commit -m`，与旧行为逐字节一致）。多族时每组调 `git commit -m <msg> -- <paths>`（git 的 partial commit），组内多于一个文件时正文才写逐文件注释。**rename 必须把 `origPath` 与新路径都放进 paths**，否则只提交新增、把删除留在工作区。多组时 `autoAdd: false` 的部分暂存语义会退化为「按工作区提交这些路径」，这是 git partial commit 的定义，不是 bug。
@@ -70,10 +70,18 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 
 **版本号识别**（`versionFileRank`/`isVersionFile` 在 lib/analyze.js，`parseVersion`/`detectVersion` 在 lib/survey.js）：候选文件按 rank 依次是**清单**（`package.json`、`Cargo.toml`、`pyproject.toml` 等，0）→ 路径任一段含 `version`（1）→ `.env*`/`env.*`（2）→ 路径任一段含 `setting`/`config`（3，所以 `settings/version.js`、`config/index.js`、`setting.js`、`config.js` 都覆盖）。键名认 `version` 与 `appVersion`（大小写不敏感；`APP_VERSION`、`VITE_APP_VERSION` 也认）。survey 先用**有界**（≤2 MiB）工作区读取确认内容里真有版本，才去 stage 它——名字匹配不等于候选，避免把无关的 `config.js`/`tsconfig.json` 塞进暂存区。`detectVersion` 按 rank 读 `:file` 与 `HEAD:file`，所以清单永远优先于同批次的 config 模块。**值必须带点号**（`1.2.3`；顶层清单键例外，`"version": "1"` 仍可用）：`version: 2` 是 schema 版本号，不能拿来建议 tag。守着的用例见 `self-test.mjs` 的「version detection (manifest, env and code files)」与 `self-test-git.mjs` 的「version bumps outside package.json」。
 
+**模型写逐文件注释**（`notes`，工具参数 → `planCommits` 的 `callerNotes`）：这是「模型可用时用模型、但只花极少 token」的路径——插件**不**自己发起 LLM 请求（宿主不变式：模型可见输入必须能从会话日志重建，而第三方插件不允许 `appendPluginRecord`），而是把**证据**压缩进 `prepare` 卡片，让已经在对局里的模型写注释：
+
+- `digestForEntry()`（lib/analyze.js）：每个文件一行 `-old → +new`，取该文件首个删除/新增内容行，每侧截 60 字符；`--unified=0` 保证两侧同属一个 hunk。`renderCard({ ..., unifiedDiff })` 把它追加在拟定注释后（`｜ …`），**永远不把 diff 放进卡片**。
+- 工具 `notes: [{ path, note }]` → `run()` 原样传进 `survey({ notes })` → `planCommits({ callerNotes })`。`callerNoteMap` 是总函数：未知路径（文件已不在改动里）、非字符串、空注释全部忽略；每条压成一行并截 160 字符。`normalizeCallerNote` 对没有 `type(scope):` 前缀的注释补上该文件自己的 key。
+- **注释不能改变分组**：`key`/`type`/`scope` 仍由路径推导；`notes` 只替换正文那一行。没写的文件继续用生成的注释。
+- `auto` 也可以带 `notes`，但正常路径是 `prepare`（拿摘要）→ `apply`（标题 + notes）。斜杠命令没有 `notes`，行为与以前完全一致。
+- 守着的用例：`self-test.mjs` 的「model-written per-file notes (the caller is the model)」4 条 + `self-test-git.mjs` 的「model-written per-file notes (prepare → apply)」1 条。
+
 卡片契约（**用户明确要求过，不要退回旧形态**）：
 
 - 结果卡片：`结论行` → `检查到 N 个文件改动，本次提交 N 个文件（+X / -Y）`（多次提交时追加 ` · M 次提交`）→ `信息：<标题>`（一次提交）**或** `提交：` + 最多 3 条标题 + 可选 `…另有 N 次提交`（多次提交）→ `标签：` → `推送：` → 可选一条 `说明：`。**不含逐文件注释、不含 git 原始输出**；一次提交时 ≤6 行，多次提交时受「最多 3 条标题」约束。
-- `prepare` 卡片首行：`🔎 **检查到 N 个文件改动（未提交）** · \`branch\` · +X / -Y`，之后按 `maxFilesShown` 列文件与每文件拟定注释（这是给模型写标题用的），最后是 `拟定提交（共 N 次，按 type(scope) 拆分）：` + 各次标题；只有一族时退回旧的单行 `拟定标题：`。
+- `prepare` 卡片首行：`🔎 **检查到 N 个文件改动（未提交）** · \`branch\` · +X / -Y`，之后按 `maxFilesShown` 列文件、每文件拟定注释与一行变更摘要（`｜ -old → +new`，这是给模型写注释用的），最后是 `拟定提交（共 N 次，按 type(scope) 拆分）：` + 各次标题；只有一族时退回旧的单行 `拟定标题：`。
 - 逐文件注释**只存在于自己那次提交的正文**（`composeMessage`，一族一个文件时不写正文），`git log` 可见。
 
 ## 5. 安装相关的坑（含已修复的 ERR_PNPM_EPERM）
@@ -152,6 +160,7 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 | 加一个配置项 | `lib/config.js` 的 `DEFAULTS` + `FIELDS` + `normalize()` + `git-commit-push.config.json` 模板；测试会查三处一致。注意**已存在的用户文件不会被改写**（避免覆盖手改），新键只在新建的文件里出现，老文件缺的键走内置默认值 |
 | 改卡片文案 | `index.js` 的 `applyCard`（结果）/ `lib/analyze.js` 的 `renderCard`（预览）；同步 `self-test.mjs` 与两个 README |
 | 改提交拆分规则 | `lib/analyze.js` 的 `planCommits` / `noteList` / `typeRank` + `index.js` 的 `commitPlan`；同步 §4、`SKILL.md`、两个 README，并补 `self-test.mjs`（分组与卡片）与 `self-test-git.mjs`（真实分次提交、rename、tag 落点） |
+| 改逐文件注释 / 模型写注释 | `noteList` / `callerNoteMap` / `normalizeCallerNote` / `digestForEntry`（lib/analyze.js）+ `notes` 参数与工具描述（index.js）；同步 `SKILL.md`、两个 README 与 §4 的「模型写逐文件注释」 |
 | 加一个 git 动作 | 只能加在 `lib/git.js` 的固定 argv 表里，并补 `self-test-git.mjs` |
 | 改触发规则 | 同时改 `git_commit_push` 描述、`SKILL.md`、命令 `description` |
 | 发布 | `npm test` → 版本按 SemVer 递增（`dsh.manifestVersion` 与包版本无关）→ `npm publish`（`publishConfig` 已钉死官方源） |
