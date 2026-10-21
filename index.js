@@ -446,6 +446,7 @@ function prepareCard(surveyResult, settings) {
     draft: surveyResult.draft,
     maxFiles: settings.maxFilesShown,
     hasUpstream: surveyResult.hasUpstream,
+    unifiedDiff: surveyResult.unifiedDiff,
   })
 }
 
@@ -564,7 +565,7 @@ async function runWithSettings(ctx, request, exec, settings) {
   // Both `prepare` and `apply` start from the same survey: `apply` needs the
   // repo root, the branch and the tag evidence, and the calls it makes are
   // in-process reads that cost no tokens.
-  const current = await survey({ cwd, language, maxFilesShown: effective.maxFilesShown })
+  const current = await survey({ cwd, language, maxFilesShown: effective.maxFilesShown, notes: request.notes })
 
   if (current.ok !== true) {
     if (current.notRepo === true) {
@@ -752,14 +753,19 @@ const TOOL_DEFINITION = {
     + 'NEVER call it on your own initiative: not because you or the user just finished editing files, not because a '
     + 'task looks complete, not because the session is ending, and not as a tidy-up step. Editing files is not a '
     + 'request to commit them. If it is unclear whether the user wants a commit, ask first. '
-    + 'action="auto" commits immediately using the rule-generated message — ONE call, no second turn. Prefer it when '
-    + 'the user simply wants the work committed and pushed and has no opinion about the wording; it is what the '
-    + '`/git-commit-push` slash command uses. '
+    + 'action="auto" commits immediately using the rule-generated message (or the `notes` you pass) — ONE call, no '
+    + 'second turn. Prefer it when the user simply wants the work committed and pushed and has no opinion about the '
+    + 'wording; it is what the `/git-commit-push` slash command uses. '
     + 'action="prepare" is the brief survey to use ONLY when the user wants to choose the message or review the '
     + 'changeset first: verdict line, file list with per-file line '
-    + 'counts, each file\'s own Conventional-Commits note, status counts, recent commit subjects for tone, and the '
-    + 'planned commit list — WITHOUT spending tokens on the diff itself. Read it, write your own '
-    + 'Conventional-Commits subject, then call action="apply" with that subject as `message`. '
+    + 'counts, each file\'s own Conventional-Commits note plus a one-line change digest (`-old → +new`), status '
+    + 'counts, recent commit subjects for tone, and the planned commit list — WITHOUT spending tokens on the diff '
+    + 'itself. Read it, write your own Conventional-Commits subject, then call action="apply" with that subject as '
+    + '`message`. '
+    + 'FOR HIGH-QUALITY PER-FILE NOTES, WRITE THEM YOURSELF (you are the model in the loop): the prepare card\'s '
+    + 'digest exists exactly so you can write precise one-line notes for a few tokens each; pass them back as '
+    + '`notes: [{path, note}]` on the apply/auto call. Notes you omit keep the generated note, and the diff is never '
+    + 'sent. For trivial changes action="auto" (one call, generated notes) is still the right choice. '
     + 'MULTI-FILE CHANGESETS BECOME SEVERAL COMMITS — the changeset is split by '
     + '`type(scope)`: every distinct Conventional-Commits type(scope) the changed files fall into is its own '
     + 'commit, in a fixed type order, each carrying its own generated subject and, when it holds more than one '
@@ -784,13 +790,28 @@ const TOOL_DEFINITION = {
       action: {
         type: 'string',
         enum: ['prepare', 'apply', 'auto'],
-        description: 'prepare: survey only. apply: commit with `message`. auto: survey and commit with the rule-generated message.',
+        description: 'prepare: survey only (carries a tiny per-file change digest for writing notes). apply: commit with `message` and optional `notes`. auto: survey and commit with the rule-generated message.',
       },
       message: {
         type: 'string',
         description: 'The commit message, in Conventional Commits form. Implies action="apply" when action is omitted. '
           + 'The first line is the subject; later lines become the body and REPLACE the per-file notes the plugin would '
           + 'generate. Supply only a subject and the per-file notes are still appended for you.',
+      },
+      notes: {
+        type: 'array',
+        description: 'Optional per-file notes YOU write, normally after a prepare card. Each note is one line; a bare '
+          + 'subject is prefixed with that file\'s type(scope). They replace the generated note for those paths only — '
+          + 'unknown paths and empty notes are ignored, and the diff never has to be read.',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['path', 'note'],
+          properties: {
+            path: { type: 'string', description: 'Repository-relative path exactly as shown in the prepare card.' },
+            note: { type: 'string', description: 'One line, e.g. "fix(api): 修正 decideRetry 的阈值判断".' },
+          },
+        },
       },
       tag: {
         type: 'string',
@@ -866,6 +887,7 @@ const TOOL_DEFINITION = {
     return run(PLUGIN_CONTEXT, {
       action,
       message: typeof args.message === 'string' ? args.message : undefined,
+      notes: Array.isArray(args.notes) ? args.notes : undefined,
       tag: typeof args.tag === 'string' ? args.tag : undefined,
       push: typeof args.push === 'boolean' ? args.push : undefined,
       language: args.language === 'zh' || args.language === 'en' ? args.language : undefined,
