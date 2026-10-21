@@ -591,6 +591,44 @@ await check('a caller subject with no body gets the per-file notes appended', as
   }
 })
 
+console.log('\nreal git: model-written per-file notes (prepare → apply)')
+
+await check('the prepare card carries a digest, and apply writes the model notes into the body', async () => {
+  const repo = createFixtureRepo('git-commit-notes-')
+  try {
+    repo.write('src/api/a.js', 'export function decideRetry(n) { return n < 3 }\n')
+    repo.write('src/api/b.js', 'export const b = 1\n')
+    repo.commitAll('chore: base')
+    repo.write('src/api/a.js', 'export function decideRetry(n) { return n < 5 }\n')
+    repo.write('src/api/b.js', 'export const b = 2\n')
+
+    const prepared = await run({ get: () => undefined }, { action: 'prepare', cwd: repo.dir }, undefined)
+    assert.equal(prepared.ok, true, String(prepared.card))
+    // The digest is what makes a model-written note cheap: one line of evidence
+    // per file instead of the diff.
+    assert.match(String(prepared.card), /｜ -export function decideRetry/, String(prepared.card))
+    assert.equal(String(prepared.card).includes('@@'), false, String(prepared.card))
+
+    const applied = await run({ get: () => undefined }, {
+      action: 'apply',
+      message: 'feat(api): 调整重试阈值',
+      notes: [
+        { path: 'src/api/a.js', note: '重试上限从 3 提高到 5' },
+        { path: 'src/api/b.js', note: 'feat(api): 更新 b 的导出值' },
+      ],
+      push: false,
+      cwd: repo.dir,
+    }, undefined)
+    assert.equal(applied.ok, true, String(applied.card))
+
+    const body = repo.git(['log', '-1', '--pretty=format:%B'])
+    assert.match(body, /- feat\(api\): 重试上限从 3 提高到 5 · src\/api\/a\.js/, body)
+    assert.match(body, /- feat\(api\): 更新 b 的导出值 · src\/api\/b\.js/, body)
+  } finally {
+    repo.cleanup()
+  }
+})
+
 console.log('\nreal git: publishing tags (a tag must actually reach the remote)')
 
 /**

@@ -31,7 +31,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { git, parseStatusZ, tagNameError } from './lib/git.js'
-import { buildMessage, inferType, planCommits, scopeOf, totalsOf, typeOfPath, declaredSymbols, removedDeclarationCount, renderCard, versionFileRank } from './lib/analyze.js'
+import { buildMessage, inferType, planCommits, scopeOf, totalsOf, typeOfPath, declaredSymbols, removedDeclarationCount, renderCard, versionFileRank, digestForEntry, splitDiffSections } from './lib/analyze.js'
 import { normalizeEntries, parseVersion } from './lib/survey.js'
 import { ensureUserConfig, loadSettingsReport, DEFAULTS, FIELDS as SETTINGS_FIELDS, IDENTITY_FIELDS, USER_CONFIG_COMMENT } from './lib/config.js'
 import { clearStaleEntry, ensureLink } from './lib/profile-link.mjs'
@@ -507,6 +507,102 @@ check('card renders without a diff or a version', () => {
   })
   assert.match(card, /main/)
   assert.match(card, /另有 1 个文件/)
+})
+
+console.log('\nmodel-written per-file notes (the caller is the model)')
+
+check('caller notes replace the generated note for that path only', () => {
+  const plan = planCommits({
+    entries: noteEntries,
+    stats: noteStats,
+    unifiedDiff: noteDiff,
+    callerNotes: [
+      { path: 'src/api/retry.ts', note: '修正 decideRetry 的阈值：3 → 5' },
+      { path: 'docs/guide.md', note: 'docs: 写下重试上限' },
+      { path: 'not-changed.ts', note: 'cannot inject a body line' },
+      { path: 'src/api/retry.test.ts', note: '   ' },
+    ],
+  })
+  assert.match(plan.message, /- feat\(api\): 修正 decideRetry 的阈值：3 → 5 · src\/api\/retry\.ts/)
+  // A bare subject gets the file's own type(scope); a Conventional note is kept.
+  assert.match(plan.message, /- docs: 写下重试上限 · docs\/guide\.md/)
+  // The file the model did not describe keeps the generated note.
+  assert.match(plan.message, /- test\(api\): 新增 retry\.test\.ts · src\/api\/retry\.test\.ts/)
+  // A path outside the changeset cannot inject a body line.
+  assert.equal(plan.notes.some(item => item.path === 'not-changed.ts'), false)
+  assert.doesNotMatch(plan.message, /cannot inject/)
+})
+
+check('a bare note takes the file prefix, a Conventional one is kept verbatim', () => {
+  const plan = planCommits({
+    entries: [{ status: 'M', path: 'src/api/a.ts' }, { status: 'M', path: 'src/api/b.ts' }],
+    stats: statMap({
+      'src/api/a.ts': { added: 1, deleted: 1, binary: false },
+      'src/api/b.ts': { added: 1, deleted: 1, binary: false },
+    }),
+    unifiedDiff: '',
+    callerNotes: [
+      { path: 'src/api/a.ts', note: 'fix(api): 修正 a 的边界' },
+      { path: 'src/api/b.ts', note: '补充 b 的注释' },
+    ],
+  })
+  assert.match(plan.message, /- fix\(api\): 修正 a 的边界 · src\/api\/a\.ts/)
+  assert.match(plan.message, /- feat\(api\): 补充 b 的注释 · src\/api\/b\.ts/)
+})
+
+check('the prepare card carries a one-line change digest, never the diff', () => {
+  const sections = splitDiffSections(noteDiff)
+  assert.equal(
+    digestForEntry(sections, { path: 'src/api/retry.ts' }),
+    '-function decideRetry(n) { return n < 3 } → +export function decideRetry(n) { return n < 5 }',
+  )
+  assert.equal(digestForEntry(sections, { path: 'src/api/missing.ts' }), undefined)
+
+  const card = renderCard({
+    branch: 'main',
+    entries: noteEntries,
+    stats: noteStats,
+    recentSubjects: [],
+    version: undefined,
+    breaking: false,
+    draft: planCommits({ entries: noteEntries, stats: noteStats, unifiedDiff: noteDiff }),
+    maxFiles: 12,
+    hasUpstream: true,
+    unifiedDiff: noteDiff,
+  })
+  assert.match(card, /src\/api\/retry\.ts.*｜ -function decideRetry/)
+  assert.equal(card.includes('@@ -1 +1 @@'), false, 'the diff itself must never be in the card')
+  assert.equal(card.includes('@@'), false, card)
+})
+
+check('a long digest line is clipped, and a one-sided change shows one side', () => {
+  const diff = [
+    'diff --git a/src/x.ts b/src/x.ts',
+    '@@ -1 +1 @@',
+    `-${'old'.repeat(40)}`,
+    `+${'new'.repeat(40)}`,
+  ].join('\n')
+  const digest = digestForEntry(splitDiffSections(diff), { path: 'src/x.ts' })
+  assert.ok(digest !== undefined && digest.length <= 126, String(digest))
+  assert.match(String(digest), /…/)
+
+  const added = ['diff --git a/src/new.ts b/src/new.ts', '@@ -0,0 +1 @@', '+export const x = 1'].join('\n')
+  assert.equal(digestForEntry(splitDiffSections(added), { path: 'src/new.ts' }), '+export const x = 1')
+})
+
+check('a secret-bearing path never gets a digest, only its generated note', () => {
+  const diff = (path) => [
+    `diff --git a/${path} b/${path}`,
+    '@@ -1 +1 @@',
+    '-API_KEY=old-secret',
+    '+API_KEY=new-secret',
+  ].join('\n')
+  for (const path of ['.env', 'config/.env.local', 'config/credentials.json', 'certs/server.key', 'src/token-store.ts']) {
+    assert.equal(digestForEntry(splitDiffSections(diff(path)), { path }), undefined, path)
+  }
+  // The skip is deliberately conservative (a name that merely looks sensitive
+  // loses its digest, not its commit); ordinary code still gets one.
+  assert.equal(digestForEntry(splitDiffSections(diff('src/api/retry.ts')), { path: 'src/api/retry.ts' }), '-API_KEY=old-secret → +API_KEY=new-secret')
 })
 
 check('card reports tag evidence and deletion count', () => {
