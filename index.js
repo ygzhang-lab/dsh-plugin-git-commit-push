@@ -70,11 +70,33 @@ function cwdOf(exec) {
 }
 
 /**
+ * The tag name to suggest for a version.
+ *
+ * Prefix matching ignores case: a `VERSION` file that already says `V1.2.3`
+ * must not be tagged `vV1.2.3`. When the version already carries the prefix —
+ * in any case — it is used verbatim, because the file is the source of truth
+ * and rewriting `V` to `v` would silently start a second prefix convention.
+ * Otherwise a leading `v` is dropped, so `release-` + `v1.2.3` stays
+ * `release-1.2.3` rather than becoming `release-v1.2.3`.
+ *
+ * @param {string} prefix
+ * @param {string} version
+ * @returns {string}
+ */
+function tagForVersion(prefix, version) {
+  if (version.toLowerCase().startsWith(prefix.toLowerCase())) return version
+  return `${prefix}${version.replace(/^v/i, '')}`
+}
+
+/**
  * Whether the settings ask for a tag question, and what name to suggest.
+ *
+ * Exported for `self-test.mjs`: the name suggestion is pure logic and is worth
+ * testing without a repository or a question service.
  *
  * @returns {{ shouldAsk: boolean, tag?: string, reasons: string[] }}
  */
-function tagDecision(surveyResult, settings, override) {
+export function tagDecision(surveyResult, settings, override) {
   const reasons = []
   if (settings.tagOnVersionChange && surveyResult.version !== undefined) {
     reasons.push(`版本号 ${surveyResult.version.from ?? '?'} → ${surveyResult.version.to ?? '?'}`)
@@ -88,7 +110,7 @@ function tagDecision(surveyResult, settings, override) {
   if (tag === undefined && reasons.length > 0) {
     const version = surveyResult.version?.to
     if (typeof version === 'string' && version !== '') {
-      tag = version.startsWith(settings.tagPrefix) ? version : `${settings.tagPrefix}${version.replace(/^v/, '')}`
+      tag = tagForVersion(settings.tagPrefix, version)
     } else {
       const now = new Date()
       const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`

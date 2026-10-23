@@ -39,7 +39,7 @@ import {
   editManifest, editProfileManifest, manifestProblem, serializeManifest,
 } from './lib/profile-edit.mjs'
 import { parseSkillFile, skillDefinition, SKILL_NAME, SKILL_PATH } from './lib/skill.js'
-import { apply, applyCard, askTag, commitPlan, inject, COMMAND_NAME, parseCommitCommand, run, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
+import { apply, applyCard, askTag, commitPlan, inject, COMMAND_NAME, parseCommitCommand, run, tagDecision, TOOL_DEFINITION, toolDefinitionProblems } from './index.js'
 
 /**
  * Point the whole run at a throwaway DSH home, so no test can write into the
@@ -767,6 +767,64 @@ await checkAsync('git() surfaces a clean GitError when git cannot answer', async
     () => git(process.platform === 'win32' ? 'C:\\nonexistent-dsh-test-dir' : '/nonexistent-dsh-test-dir', ['rev-parse'], { timeoutMs: 5_000 }),
     (error) => error instanceof Error && error.name === 'GitError' && typeof error.code === 'string',
   )
+})
+
+console.log('\nthe suggested tag name (prefix matching ignores case)')
+
+/** A survey result that only carries a version bump. */
+function versionBump(to) {
+  return { version: { from: '0.9.0', to }, entries: [], breaking: false }
+}
+
+await check('the prefix is added once, whatever case the version uses', () => {
+  const settings = { ...DEFAULTS, tagPrefix: 'v' }
+  // No prefix in the file: the configured one is added.
+  assert.equal(tagDecision(versionBump('1.2.3'), settings).tag, 'v1.2.3')
+  // Already prefixed in lowercase: untouched.
+  assert.equal(tagDecision(versionBump('v1.2.3'), settings).tag, 'v1.2.3')
+  // The reported bug: `V1.2.3` used to become `vV1.2.3`, because the match was
+  // case-sensitive and the leading `v` strip is lowercase-only.
+  assert.equal(tagDecision(versionBump('V1.2.3'), settings).tag, 'V1.2.3')
+})
+
+await check('a custom prefix is matched case-insensitively and not rewritten', () => {
+  const settings = { ...DEFAULTS, tagPrefix: 'release-' }
+  assert.equal(tagDecision(versionBump('v2.0.0'), settings).tag, 'release-2.0.0')
+  assert.equal(tagDecision(versionBump('release-2.0.0'), settings).tag, 'release-2.0.0')
+  // Any casing of the prefix counts as already present; the file's own spelling
+  // wins, so one repository never ends up with two prefix conventions.
+  assert.equal(tagDecision(versionBump('Release-2.0.0'), settings).tag, 'Release-2.0.0')
+
+  // An uppercase configured prefix is not rewritten either.
+  const upper = { ...DEFAULTS, tagPrefix: 'V' }
+  assert.equal(tagDecision(versionBump('v3.0.0'), upper).tag, 'v3.0.0')
+  assert.equal(tagDecision(versionBump('3.0.0'), upper).tag, 'V3.0.0')
+})
+
+await check('the tag decision reports why it asks, and honors an explicit override', () => {
+  const settings = { ...DEFAULTS, tagPrefix: 'v' }
+  const bump = tagDecision(versionBump('1.2.3'), settings)
+  assert.equal(bump.shouldAsk, true)
+  assert.match(bump.reasons[0], /版本号/)
+  assert.equal(bump.tag, 'v1.2.3')
+
+  assert.deepEqual(tagDecision(versionBump('1.2.3'), settings, 'custom-tag'), {
+    shouldAsk: true,
+    tag: 'custom-tag',
+    reasons: bump.reasons,
+  })
+
+  // Nothing matched: no question, no suggestion.
+  const quiet = tagDecision({ entries: [], breaking: false }, settings)
+  assert.equal(quiet.shouldAsk, false)
+  assert.equal('tag' in quiet, false)
+})
+
+await check('without a version the date stamp carries the configured prefix', () => {
+  const settings = { ...DEFAULTS, tagPrefix: 'rel-', tagOnFileCount: 1 }
+  const decision = tagDecision({ entries: [{ path: 'a.js' }], breaking: false }, settings)
+  assert.equal(decision.shouldAsk, true)
+  assert.match(decision.tag, /^rel-\d{8}$/)
 })
 
 console.log('\nthe tag question (a custom name comes from the input box)')
