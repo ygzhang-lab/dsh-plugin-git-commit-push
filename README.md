@@ -245,6 +245,8 @@ git_commit_push({ action: "prepare", cwd: "/path/to/repo" })   # 会话目录不
 
 `标签依据` 里的版本号来自**这次改动的文件本身**。除了 `package.json`、`Cargo.toml`、`pyproject.toml`、`composer.json`、`pom.xml` 等清单，插件也会读 `.env`（`VERSION=…`、`VITE_APP_VERSION=…`）以及**任何路径含 `version` / `setting` / `config` 的文件**——前端后端都适用：`settings/version.js`、`settings/index.js`、`config/index.js`、`setting.js`、`config.js`、`src/config/index.ts` 等，键名认 `version` 与 `appVersion`（大小写不敏感）。优先级固定：清单 > version 文件 > `.env` > setting/config 模块，所以同一批改动里 `package.json` 永远优先。值必须像版本号（含点号，如 `1.2.3`；清单顶层的 `version` 键例外；`version: 2` 这种 schema 版本号不会被当作发布版本），找不到版本就不提打标签。
 
+建议的标签名由 `tagPrefix`（默认 `v`）加版本号组成，**前缀匹配不区分大小写**：版本号已经是 `V1.2.4` 时不会拼成 `vV1.2.4`——已经带了前缀就原样使用（文件里写 `V` 就保持 `V`，不会被改写成 `v`）；没带前缀时先去掉版本号自己的开头 `v` 再拼接，所以 `release-` + `v1.2.4` 得到 `release-1.2.4`。
+
 提交后（结果卡片只有结论 + 计数摘要 + 提交标题列表 / 标签 / 推送，至多一行 `说明：`）：
 
 ```
@@ -411,7 +413,7 @@ DSH 启动加载插件时，如果这个文件还不存在，插件就用包内�
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（123 项）
+node self-test.mjs              # 纯逻辑 + 打包 / 配置 / skill 契约（127 项）
 node self-test-git.mjs          # 真实 git：porcelain/-z 分帧、rename 归属、版本号识别、端到端提交、按 type(scope) 分次提交、标签发布、卡片结论（38 项）
 node capture-git-format.mjs     # 只打印真实 git 的 -z 原始字节，用于诊断分帧问题
 ```
@@ -456,7 +458,7 @@ lib/profile-edit.mjs     两个安装脚本共用的 profile 清单编辑器（�
 lib/profile-link.mjs     两个安装脚本共用的 node_modules 条目管理器：陈旧条目清理（链接只 unlink、不跟随，防 ERR_PNPM_EPERM）+ `ensureLink` 补上 pnpm 拒绝重建的 `link:` 条目
 setup.ps1                Windows 安装 / 卸载（方式 C）
 setup.sh                 macOS / Linux 安装 / 卸载（方式 C）
-self-test.mjs            纯逻辑 + 打包 / 配置契约自检（123 项）
+self-test.mjs            纯逻辑 + 打包 / 配置契约自检（127 项）
 self-test-git.mjs        真实 git 集成自检（38 项，自建临时仓库）
 capture-git-format.mjs   打印真实 git 的 -z 原始字节（诊断分帧问题）
 e2e-check.mjs            直连调用 run()，用于不重启验证提交路径

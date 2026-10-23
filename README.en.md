@@ -267,6 +267,11 @@ works for frontend and backend projects alike: `settings/version.js`, `settings/
 `package.json` always wins within one changeset. The value must look like a version (a dot, e.g. `1.2.3`; a top-level manifest `version` is exempt;
 a schema counter such as `version: 2` is not treated as a release), and no version means no tag suggestion.
 
+The suggested tag name is `tagPrefix` (default `v`) plus the version, and **prefix matching ignores case**:
+a version that already says `V1.2.4` is not tagged `vV1.2.4` — a version that carries the prefix is used
+verbatim (a `V` in the file stays `V`), and one that does not first loses its own leading `v`, so
+`release-` + `v1.2.4` becomes `release-1.2.4`.
+
 And after a commit (the result card is only the verdict, one counts summary, the commit list or single
 `信息` line, `标签` / `推送`, plus at most one `说明：` line):
 
@@ -486,7 +491,7 @@ directory and delete them):
 
 ```bash
 npm test                        # = node self-test.mjs && node self-test-git.mjs
-node self-test.mjs              # pure logic + packaging/config/skill contracts (123 checks)
+node self-test.mjs              # pure logic + packaging/config/skill contracts (127 checks)
 node self-test-git.mjs          # real git: porcelain -z framing, rename attribution, version detection, end-to-end commit, type(scope) commit splitting, tag publishing, card verdicts (38 checks)
 node capture-git-format.mjs     # prints raw git -z bytes, for diagnosing framing
 ```
@@ -556,7 +561,7 @@ lib/profile-edit.mjs     profile manifest editor shared by both installers (idem
 lib/profile-link.mjs     node_modules entry manager shared by both installers: stale-entry removal (unlinks a link, never follows it, so ERR_PNPM_EPERM cannot recur) plus `ensureLink`, which fills the `link:` entry pnpm refuses to rebuild
 setup.ps1                Windows install / uninstall (path C)
 setup.sh                 macOS / Linux install / uninstall (path C)
-self-test.mjs            pure logic + packaging/config contracts (123 checks)
+self-test.mjs            pure logic + packaging/config contracts (127 checks)
 self-test-git.mjs        real-git integration (38 checks, own temporary repository)
 capture-git-format.mjs   prints raw git -z bytes (framing diagnostics)
 e2e-check.mjs            calls run() directly, to verify the commit path without restarting DSH
