@@ -1,4 +1,4 @@
-# dsh-plugin-git-commit-push
+# DSH Plugin Git Commit&Push
 
 English | [中文](README.md)
 
