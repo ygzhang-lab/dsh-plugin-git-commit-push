@@ -7,7 +7,7 @@ DSH（DeepSeek Harness） 0 Token Git 提交推送插件，一次调用完成：
 ![GitHub License](https://img.shields.io/github/license/ygzhang-lab/dsh-plugin-git-commit-push)
 [![NPM Version](https://img.shields.io/npm/v/dsh-plugin-git-commit-push)](https://www.npmjs.com/package/dsh-plugin-git-commit-push)
 [![NPM Downloads](https://img.shields.io/npm/dy/dsh-plugin-git-commit-push)](https://www.npmjs.com/package/dsh-plugin-git-commit-push)
-[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/ygzhang-lab/dsh-plugin-git-commit-push)
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/zh/ygzhang-lab/dsh-plugin-git-commit-push)
 
 ### 插件名：
 
