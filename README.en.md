@@ -4,8 +4,18 @@ English | [中文](README.md)
 
 DSH (DeepSeek Harness) Git commit and push plugin, one call to complete: summarize changes, automatically generate commit messages for each changed file according to Conventional Commits, **split them into several commits by `type(scope)`**, ask for tagging if necessary, and then push to the Git remote repository configured for the current project.
 
--  Users can complete a commit and push with just a 0 Token through the `/git-commit-push` slash command (without going through the model, as the script automatically generates simple and clear commits according to the rules, split into several commits by `type(scope)`);
--  DSH can utilize the `git_commit_push` tool, requiring minimal tokens to accomplish high-quality annotations, a `type(scope)`-split commit series and one push.
+[![GitHub Repo stars](https://img.shields.io/github/stars/ygzhang-lab/dsh-plugin-git-commit-push?style=flat&logo=github)](https://github.com/ygzhang-lab/dsh-plugin-git-commit-push)
+![GitHub License](https://img.shields.io/github/license/ygzhang-lab/dsh-plugin-git-commit-push)
+[![NPM Version](https://img.shields.io/npm/v/dsh-plugin-git-commit-push)](https://www.npmjs.com/package/dsh-plugin-git-commit-push)
+[![NPM Downloads](https://img.shields.io/npm/dy/dsh-plugin-git-commit-push)](https://www.npmjs.com/package/dsh-plugin-git-commit-push)
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/ygzhang-lab/dsh-plugin-git-commit-push)
+
+### Plugin Name:
+
+> dsh-plugin-git-commit-push
+
+- Users can complete a commit and push with just a 0 Token through the `/git-commit-push` slash command (without going through the model, as the script automatically generates simple and clear commits according to the rules, split into several commits by `type(scope)`);
+- DSH can utilize the `git_commit_push` tool, requiring minimal tokens to accomplish high-quality annotations, a `type(scope)`-split commit series and one push.
   This plugin serves as a tool-based replacement for the earlier `.agents/skills/git-commit-push` Skill. It condenses the process of running dozens of Shell scripts and reading through a pile of raw Git output, which is typically required for pure Skill work, into **1-2 tool invocations + a compact card**.
 
 Installing gives you three surfaces:
@@ -34,16 +44,21 @@ package declares `dsh.bundle.patch` and makes itself a DSH _bundle_. Without tha
 answers every request with **"这个包没有声明组合包，不能作为插件管理"** (host code `not-bundle`).
 
 ### B. Command line
+
 > install
-dsh plugin --profile <profile> add dsh-plugin-git-commit-push     
+> dsh plugin --profile <profile> add dsh-plugin-git-commit-push
+
 ```sh
-dsh plugin --profile web add dsh-plugin-git-commit-push 
+dsh plugin --profile web add dsh-plugin-git-commit-push
 ```
+
 > uninstall
-dsh plugin --profile <profile> remove dsh-plugin-git-commit-push 
+> dsh plugin --profile <profile> remove dsh-plugin-git-commit-push
+
 ```sh
 dsh plugin --profile web remove dsh-plugin-git-commit-push
 ```
+
 `<profile>` is your profile name (`web`, `headless`, a custom one). Both directions edit the profile's
 `package.json` (dependency + `dsh.profile.bundles`) and **need a DSH restart**.
 
@@ -151,7 +166,7 @@ lets exactly that one version through:
 ```yaml
 # %USERPROFILE%\.dsh\profiles\desktop\pnpm-workspace.yaml
 minimumReleaseAgeExclude:
-  - dsh-plugin-git-commit-push@1.0.1   # only 1.0.1 passes — publishing 1.0.2 changes nothing
+  - dsh-plugin-git-commit-push@1.0.1 # only 1.0.1 passes — publishing 1.0.2 changes nothing
 ```
 
 Drop the version and exempt the **package**, and every future release of this plugin stays installable
@@ -198,8 +213,8 @@ has already been made.
 | Path                                     | Model tokens   | Why                                                                                                                                                                                                                    |
 | ---------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **1. `/git-commit-push` slash command**  | **0 (really)** | No model request is made at all. Command discovery, execution and UI output cost no model tokens, and the result is rendered in the UI only — it never enters the transcript. This is the **only** truly 0-token path. |
-| **2. `git_commit_push(auto)` tool call** | a few          | The path a plain "commit and push" takes: ONE call, and the model only emits that call (arguments + thinking). The plugin writes the message itself, so there is **no** second round-trip; the card is ~200 tokens. |
-| **3. `prepare` + `apply`**               | ~2 round trips | Only when the user wants to choose the message: only the `prepare` card (~200 tokens) and the `apply` `message` argument enter the context — **no diff is read**.                                                    |
+| **2. `git_commit_push(auto)` tool call** | a few          | The path a plain "commit and push" takes: ONE call, and the model only emits that call (arguments + thinking). The plugin writes the message itself, so there is **no** second round-trip; the card is ~200 tokens.    |
+| **3. `prepare` + `apply`**               | ~2 round trips | Only when the user wants to choose the message: only the `prepare` card (~200 tokens) and the `apply` `message` argument enter the context — **no diff is read**.                                                      |
 
 So: "the slash command costs 0 tokens" is accurate; "the tool costs 0 tokens" is **not** — the model still
 pays for each call. What the plugin saves is **comparative**: reading raw git output (thousands of tokens →
@@ -375,11 +390,11 @@ and no chance of a reinstall wiping your settings (the file is not inside the pa
 
 **Two sources, highest first:**
 
-| Layer | Location                                                                                | Written by                                                       |
-| ----- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| 1     | `<DSH_HOME>/git-commit-push.config.json` (default `~/.dsh/git-commit-push.config.json`) | **generated by the plugin on first mount**, then edited by you    |
-| 2     | the shipped template `git-commit-push.config.json`                                      | the package (replaced by any reinstall)                          |
-| —     | built-in defaults                                                                       | whatever none of the above sets                                  |
+| Layer | Location                                                                                | Written by                                                     |
+| ----- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| 1     | `<DSH_HOME>/git-commit-push.config.json` (default `~/.dsh/git-commit-push.config.json`) | **generated by the plugin on first mount**, then edited by you |
+| 2     | the shipped template `git-commit-push.config.json`                                      | the package (replaced by any reinstall)                        |
+| —     | built-in defaults                                                                       | whatever none of the above sets                                |
 
 A missing file is not an error. A file that exists but is not valid JSON is **reported** — the result card
 gains a "配置未生效: …" line rather than silently doing nothing. Omitted keys keep their defaults. A change
@@ -448,8 +463,8 @@ card tells you how to add it later with the `tag` argument.
 push** (its own command, so a rejected tag is never confused with a rejected branch). Two cases that used to
 leave the tag local-only are now covered:
 
-- **a tag that already exists locally is still published** — what is skipped is the *creation*, not the
-  *publication* (both used to be skipped, so a tag left behind by an earlier failed push stayed local forever
+- **a tag that already exists locally is still published** — what is skipped is the _creation_, not the
+  _publication_ (both used to be skipped, so a tag left behind by an earlier failed push stayed local forever
   while the card said "skipped", which reads like success);
 - a refspec-only push must name the remote: `git push refs/tags/v1` makes git read the refspec as the
   **remote** and fail outright (`does not appear to be a git repository`), so that path resolves the branch's

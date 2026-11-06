@@ -1,14 +1,24 @@
-# dsh-plugin-git-commit-push
+# DSH Plugin Git Commit&Push
 
 [English](README.en.md) | 中文
 DSH（DeepSeek Harness） 0 Token Git 提交推送插件，一次调用完成：汇总改动，按 Conventional Commits 为每个变更文件自动生成提交信息，**按 `type(scope)` 拆成多次提交**后一次推送到Git，必要时询问打标签，然后推送到当前项目配置的 Git 远程仓库。
 
--  通过 `/git-commit-push` 斜杠命令使用, 0 Token 即可完成提交与推送(不经过模型，脚本自动按规则生成简单明了的 Commits，并按 `type(scope)` 拆成多次提交 )；
--  通过 `git_commit_push` 工具调用, 极少 Token 即可完成高质量的注释和按 `type(scope)` 拆分的多次提交与一次推送。
+[![GitHub Repo stars](https://img.shields.io/github/stars/ygzhang-lab/dsh-plugin-git-commit-push?style=flat&logo=github)](https://github.com/ygzhang-lab/dsh-plugin-git-commit-push)
+![GitHub License](https://img.shields.io/github/license/ygzhang-lab/dsh-plugin-git-commit-push)
+[![NPM Version](https://img.shields.io/npm/v/dsh-plugin-git-commit-push)](https://www.npmjs.com/package/dsh-plugin-git-commit-push)
+[![NPM Downloads](https://img.shields.io/npm/dy/dsh-plugin-git-commit-push)](https://www.npmjs.com/package/dsh-plugin-git-commit-push)
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/ygzhang-lab/dsh-plugin-git-commit-push)
+
+### 插件名：
+
+> dsh-plugin-git-commit-push
+
+- 通过 `/git-commit-push` 斜杠命令使用, 0 Token 即可完成提交与推送(不经过模型，脚本自动按规则生成简单明了的 Commits，并按 `type(scope)` 拆成多次提交 )；
+- 通过 `git_commit_push` 工具调用, 极少 Token 即可完成高质量的注释和按 `type(scope)` 拆分的多次提交与一次推送。
 
 本插件是早期 `.agents/skills/git-commit-push` 这个 Skill 的工具化替代，把纯 Skill 工作需要模型跑十来条 Shell，读一堆 Git 原始输出的流程，压成 **1–2 次工具调用 + 一张紧凑卡片**。
 
-装好之后你得到三样东西：
+### 装好之后你得到三样东西：
 
 | 表面     | 名字                                              | 谁用它                       |
 | -------- | ------------------------------------------------- | ---------------------------- |
@@ -24,6 +34,7 @@ DSH（DeepSeek Harness） 0 Token Git 提交推送插件，一次调用完成：
 ### 方式 A：插件页（推荐）
 
 > DSH → **设置 → 插件** → 安装框里填包名：
+
 ```
 dsh-plugin-git-commit-push
 ```
@@ -33,16 +44,21 @@ dsh-plugin-git-commit-push
 **「这个包没有声明组合包，不能作为插件管理」**（host 侧错误码 `not-bundle`）。
 
 ### 方式 B：命令行
+
 > 安装
-dsh plugin --profile <profile> add dsh-plugin-git-commit-push
+> dsh plugin --profile <profile> add dsh-plugin-git-commit-push
+
 ```sh
 dsh plugin --profile web add dsh-plugin-git-commit-push
 ```
+
 > 卸载
-dsh plugin --profile <profile> remove dsh-plugin-git-commit-push  
+> dsh plugin --profile <profile> remove dsh-plugin-git-commit-push
+
 ```sh
-dsh plugin --profile web remove dsh-plugin-git-commit-push 
+dsh plugin --profile web remove dsh-plugin-git-commit-push
 ```
+
 `<profile>` 是你的 profile 名（如 `web`、`headless`、自定义名）。装/卸都会改 profile 的
 `package.json`（依赖 + `dsh.profile.bundles`），**需要重启 DSH** 才生效。
 
@@ -141,7 +157,7 @@ pnpm 11 的供给链策略会拒绝「发布时长不足 N 分钟」的版本，
 ```yaml
 # %USERPROFILE%\.dsh\profiles\desktop\pnpm-workspace.yaml
 minimumReleaseAgeExclude:
-  - dsh-plugin-git-commit-push@1.0.1   # 只放行 1.0.1 —— 发了 1.0.2 照样被挡
+  - dsh-plugin-git-commit-push@1.0.1 # 只放行 1.0.1 —— 发了 1.0.2 照样被挡
 ```
 
 把版本号去掉、**按包名**豁免，本插件以后所有版本都不再受这条策略限制（实测：同一份空 lock 重新解析，
@@ -182,11 +198,11 @@ minimumReleaseAgeExclude:
 
 **部分准确，需要限定。** 准确的划分是「哪条路径、消耗什么」：
 
-| 路径                                    | 模型 token      | 说明                                                                                                                                        |
-| --------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| **1. 斜杠命令 `/git-commit-push`**      | **0（真的 0）** | 完全不产生模型请求。命令的发现、执行与 UI 输出**不产生模型 token**，结果只渲染在 UI 里、**不进对话历史**。这是**唯一**真正 0 token 的路径。 |
-| **2. 工具 `git_commit_push(auto)`**     | 少量            | 普通「提交并推送」走这条：一次调用，模型只生成这次工具调用（参数 + 思考）。提交信息由插件自己写，所以**没有**第二轮；返回卡片约 200 token。 |
-| **3. 工具 `prepare` + `apply`**         | 约 2 次往返     | 只在用户想自己挑提交信息时用：只有 `prepare` 卡片（约 200 token）和 `apply` 的 `message` 参数进上下文，**不读 diff**。                      |
+| 路径                                | 模型 token      | 说明                                                                                                                                        |
+| ----------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1. 斜杠命令 `/git-commit-push`**  | **0（真的 0）** | 完全不产生模型请求。命令的发现、执行与 UI 输出**不产生模型 token**，结果只渲染在 UI 里、**不进对话历史**。这是**唯一**真正 0 token 的路径。 |
+| **2. 工具 `git_commit_push(auto)`** | 少量            | 普通「提交并推送」走这条：一次调用，模型只生成这次工具调用（参数 + 思考）。提交信息由插件自己写，所以**没有**第二轮；返回卡片约 200 token。 |
+| **3. 工具 `prepare` + `apply`**     | 约 2 次往返     | 只在用户想自己挑提交信息时用：只有 `prepare` 卡片（约 200 token）和 `apply` 的 `message` 参数进上下文，**不读 diff**。                      |
 
 所以：
 
@@ -327,11 +343,11 @@ DSH 启动加载插件时，如果这个文件还不存在，插件就用包内�
 
 **两层来源，自上而下覆盖：**
 
-| 层  | 位置                                                                                  | 谁写它                        |
-| --- | ------------------------------------------------------------------------------------- | ----------------------------- |
+| 层  | 位置                                                                                  | 谁写它                                     |
+| --- | ------------------------------------------------------------------------------------- | ------------------------------------------ |
 | 1   | `<DSH_HOME>/git-commit-push.config.json`（默认 `~/.dsh/git-commit-push.config.json`） | **插件首次挂载时自动生成**，之后你自己编辑 |
-| 2   | 包内模板 `git-commit-push.config.json`                                                | 随包出货（重装会被替换）      |
-| —   | 内置默认值                                                                            | 兜住以上都没设的字段          |
+| 2   | 包内模板 `git-commit-push.config.json`                                                | 随包出货（重装会被替换）                   |
+| —   | 内置默认值                                                                            | 兜住以上都没设的字段                       |
 
 文件缺失不是错误（用默认值）；文件存在但不是合法 JSON 时，结果卡片里会追加一行
 「配置未生效：…」，而不是静默忽略。没写的键保持默认值。**改完不用重启 DSH**：下一次工具调用
